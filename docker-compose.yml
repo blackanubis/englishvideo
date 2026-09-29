@@ -1,0 +1,24 @@
+services:
+  english-kids:
+    build: .
+    image: english-kids:1.0
+    container_name: english-kids
+    restart: unless-stopped
+    # 只在局域网使用，不要在路由器上做端口映射
+    ports:
+      - "13002:13002"
+    environment:
+      TZ: Asia/Shanghai
+      EK_PORT: "13002"
+      EK_DATA: /app/data
+      # 容器内媒体根，不要改
+      EK_MEDIA_ROOT: /media/root
+      # NAS 上对应的真实路径，网页里显示路径时会做替换，方便你核对
+      EK_HOST_ROOT: /vol1/1000
+    volumes:
+      # 媒体根：只读挂载。建议挂到"放视频的那一级"目录，
+      # 例如视频在 /vol1/1000/media/english-videos，这里就挂 /vol1/1000/media
+      # 家长后续可在网页「家长设置 → 选择视频目录」里自行挑选子目录，不用改这里
+      - /vol1/1000:/media/root:ro
+      # 数据卷：学习记录、配置、截图缓存
+      - ./data:/app/data
