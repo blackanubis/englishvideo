@@ -1,0 +1,79 @@
+﻿word,zh,category,emoji,sentence
+cat,猫,animals,🐱,I see a cat.
+dog,狗,animals,🐶,The dog is big.
+pig,猪,animals,🐷,The pig is pink.
+duck,鸭子,animals,🦆,The duck can swim.
+cow,奶牛,animals,🐮,The cow is white.
+bird,鸟,animals,🐦,The bird can fly.
+fish,鱼,animals,🐟,The fish can swim.
+bear,熊,animals,🐻,The bear is brown.
+rabbit,兔子,animals,🐰,The rabbit can jump.
+elephant,大象,animals,🐘,The elephant is big.
+apple,苹果,fruit,🍎,I like apples.
+banana,香蕉,fruit,🍌,The banana is yellow.
+orange,橙子,fruit,🍊,This orange is sweet.
+grape,葡萄,fruit,🍇,The grapes are purple.
+pear,梨,fruit,🍐,I eat a pear.
+peach,桃子,fruit,🍑,The peach is pink.
+strawberry,草莓,fruit,🍓,The strawberry is red.
+watermelon,西瓜,fruit,🍉,The watermelon is big.
+lemon,柠檬,fruit,🍋,The lemon is yellow.
+cherry,樱桃,fruit,🍒,The cherry is small.
+red,红色,colors,🟥,I like red.
+blue,蓝色,colors,🟦,The sky is blue.
+green,绿色,colors,🟩,The grass is green.
+yellow,黄色,colors,🟨,The sun is yellow.
+black,黑色,colors,⬛,The cat is black.
+white,白色,colors,⬜,The snow is white.
+pink,粉色,colors,🌸,I like pink.
+purple,紫色,colors,🟪,This is purple.
+orange,橙色,colors,🟠,The orange is orange.
+brown,棕色,colors,🟤,The bear is brown.
+one,一,numbers,1️⃣,I have one apple.
+two,二,numbers,2️⃣,I see two cats.
+three,三,numbers,3️⃣,Three little ducks.
+four,四,numbers,4️⃣,I have four books.
+five,五,numbers,5️⃣,Five little monkeys.
+six,六,numbers,6️⃣,Count to six.
+seven,七,numbers,7️⃣,Seven colors.
+eight,八,numbers,8️⃣,Eight little birds.
+nine,九,numbers,9️⃣,Nine white sheep.
+ten,十,numbers,🔟,I can count to ten.
+eye,眼睛,body,👁️,This is my eye.
+ear,耳朵,body,👂,This is my ear.
+nose,鼻子,body,👃,This is my nose.
+mouth,嘴巴,body,👄,This is my mouth.
+hand,手,body,✋,Wash your hands.
+foot,脚,body,🦶,This is my foot.
+arm,胳膊,body,💪,This is my arm.
+leg,腿,body,🦵,This is my leg.
+tooth,牙齿,body,🦷,Brush your teeth.
+hair,头发,body,💇,My hair is long.
+mom,妈妈,family,👩,I love my mom.
+dad,爸爸,family,👨,I love my dad.
+baby,宝宝,family,👶,The baby is cute.
+sister,姐妹,family,👧,My sister is six.
+brother,兄弟,family,👦,My brother is tall.
+grandma,奶奶,family,👵,Grandma is kind.
+grandpa,爷爷,family,👴,Grandpa is funny.
+family,家庭,family,👨‍👩‍👧,I love my family.
+friend,朋友,family,🧒,This is my friend.
+jump,跳,actions,🤸,I can jump.
+run,跑,actions,🏃,I can run fast.
+walk,走,actions,🚶,Let us walk.
+eat,吃,actions,🍽️,I eat an apple.
+drink,喝,actions,🥤,I drink water.
+sleep,睡觉,actions,😴,The baby sleeps.
+read,读,actions,📖,I read a book.
+sing,唱,actions,🎵,Let us sing.
+dance,跳舞,actions,💃,I can dance.
+play,玩,actions,⚽,Let us play.
+car,小汽车,transport,🚗,The car is red.
+bus,公交车,transport,🚌,I go by bus.
+bike,自行车,transport,🚲,I ride a bike.
+train,火车,transport,🚆,The train is long.
+plane,飞机,transport,✈️,The plane can fly.
+boat,小船,transport,🚢,The boat is small.
+taxi,出租车,transport,🚕,We take a taxi.
+truck,卡车,transport,🚚,The truck is big.
+rocket,火箭,transport,🚀,The rocket goes up.
