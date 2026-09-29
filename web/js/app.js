@@ -12,7 +12,10 @@ var S = {
   player: null,      // {id, time}
   speakIdx: 0,
   game: null,
-  videoHinted: false
+  videoHinted: false,
+  asrCands: [],   // 从字幕/语音提取出来的候选词
+  asrCaps: null,  // {ffmpeg, whisper, modelReady, modelSize}
+  asrRunning: false
 };
 
 /* ============ 工具 ============ */
@@ -246,7 +249,9 @@ function viewVideo() {
   var cur = currentVideo();
   h += '<video class="player" id="player" playsinline controls preload="metadata" ' +
     (cur.cover ? 'poster="' + esc(cur.cover) + '"' : '') +
-    ' src="' + Api.streamUrl(cur) + '"></video>';
+    ' src="' + Api.streamUrl(cur) + '">' +
+    '<track kind="subtitles" src="/api/subtitle?id=' + esc(cur.id) +
+    '" srclang="en" label="English"></track></video>';
   h += '<div class="card"><div class="t" style="font-size:18px;font-weight:700">' + esc(cur.title) + '</div>' +
     '<div class="muted">' + esc(cur.displayPath || cur.name) +
     (cur.iosOk ? "" : ' <span class="badge">iPad 可能播不了</span>') + '</div>' +
@@ -580,6 +585,17 @@ function viewParent() {
     '<div style="margin-top:12px"><button class="btn ghost" data-act="annotate">开始标注</button></div>' +
     '<div class="muted" style="margin-top:8px">已标注单词：' + Object.keys(S.ann).length + ' 个</div></div>';
 
+  h += '<div class="card"><div style="font-weight:700;margin-bottom:8px">🎙️ 从视频里提取单词</div>' +
+    '<div class="muted">优先读视频自带的字幕；没有字幕就用语音识别转写。' +
+    '提取完会出一张候选词表，你勾选后进入跟读和连词。</div>' +
+    '<div id="asrCaps" class="muted" style="margin-top:8px"></div>' +
+    '<div class="btnrow" style="margin-top:12px">' +
+    '<button class="btn orange" data-act="asrstart">开始提取</button>' +
+    '<button class="btn" data-act="asrsuggest">查看候选词</button>' +
+    '<button class="btn ghost" data-act="asrstartforce">强制重新提取</button>' +
+    '<button class="btn ghost" data-act="asrclear">清空提取结果</button></div>' +
+    '<div class="muted" id="asrInfo" style="margin-top:10px"></div></div>';
+
   var p = cfg.plan || {};
   h += '<div class="card"><div style="font-weight:700;margin-bottom:12px">⏱️ 每日安排</div>' +
     field("每天总时长（分钟）", '<input type="number" id="cfDaily" value="' + (cfg.dailyMinutes || 20) + '">') +
@@ -734,6 +750,18 @@ function bindSheet() {
     else if (act === "open") loadBrowse(el.dataset.path);
     else if (act === "usethis") useDir(el.dataset.path);
     else if (act === "frame") pickWordFor(el.dataset.src);
+    else if (act === "asrall" || act === "asrnone") {
+      var on = act === "asrall";
+      document.querySelectorAll(".asrlist .asrchk input[type=checkbox]:not(.asrimg)").forEach(function (c) {
+        if (!c.disabled) c.checked = on;
+      });
+    } else if (act === "asrframe") {
+      document.querySelectorAll(".asrlist .asrrow").forEach(function (row) {
+        var zh = row.querySelector(".asrzh");
+        var cb = row.querySelector(".asrchk input[type=checkbox]");
+        if (cb && !cb.disabled) cb.checked = !!(zh && zh.value.trim());
+      });
+    } else if (act === "asrimport") importSuggest();
     else if (act === "tag") {
       Api.annotate(el.dataset.img, el.dataset.word).then(function (r) {
         S.ann = r.items || {};
@@ -786,6 +814,14 @@ function bind() {
         render();
       });
     } else if (act === "annotate") openAnnotate();
+    else if (act === "asrstart") startAsr(false);
+    else if (act === "asrstartforce") startAsr(true);
+    else if (act === "asrsuggest") openSuggest();
+    else if (act === "asrclear") {
+      if (confirm("清空已提取的字幕/转写结果？词库不受影响。")) {
+        Api.asrClear().then(function () { toast("已清空"); loadAsrCaps(); });
+      }
+    }
     else if (act === "savesettings") saveSettings();
     else if (act === "cat") toggleCat(el.dataset.id);
     else if (act === "export") exportProgress();
@@ -839,7 +875,7 @@ function bind() {
     setTimeout(drawLines, 30);
     window.addEventListener("resize", drawLines);
   }
-  if (S.route === "parent") loadHealth();
+  if (S.route === "parent") { loadHealth(); loadAsrCaps(); }
 }
 
 function checkVideoBudget() {
@@ -902,6 +938,14 @@ function toggleCat(id) {
     });
   });
 }
+function refreshWords() {
+  Promise.all([Api.words(), Api.categories(), Api.annotations()]).then(function (r) {
+    S.words = dedupe((r[0].words) || []);
+    S.cats = r[1].categories || [];
+    S.ann = (r[2].items) || {};
+    render();
+  });
+}
 function exportProgress() {
   var blob = new Blob([JSON.stringify(S.progress, null, 2)], { type: "application/json" });
   var a = document.createElement("a");
@@ -925,6 +969,98 @@ function loadHealth() {
         bad.map(esc).join("、") + '</div>' : '') +
       '<div class="muted" style="margin-top:8px">服务端口 13002 · 仅局域网访问</div>';
   });
+}
+
+/* ============ 从视频提取单词 ============ */
+function loadAsrCaps() {
+  Api.asrStatus().then(function (r) {
+    S.asrCaps = r.caps || {};
+    S.asrRunning = !!(r.state && r.state.running);
+    var el = document.getElementById("asrCaps");
+    if (el) {
+      var c = S.asrCaps;
+      el.innerHTML = 'ffmpeg ' + (c.ffmpeg ? '✅' : '⚠️') +
+        ' · 语音识别 ' + (c.whisper ? '✅' : '⚠️ 未安装') +
+        ' · 模型 ' + (c.modelReady ? '已就绪（' + esc(c.modelSize || '') + '）' : '未就绪') +
+        '<br>' + (c.whisper && c.modelReady
+          ? '没有字幕的视频会自动转写，比较慢，可以挂着跑'
+          : '只能提取已有字幕的视频；想用语音识别需要带模型的镜像');
+    }
+    var info = document.getElementById("asrInfo");
+    if (info && r.state && r.state.message) info.textContent = r.state.message;
+    if (S.asrRunning) setTimeout(loadAsrCaps, 2000);
+  });
+}
+function startAsr(force) {
+  if (!S.videos.length) { toast("先扫描视频再来提取"); return; }
+  var ids = S.videos.map(function (v) { return v.id; });
+  Api.asrStart(ids, force).then(function () {
+    toast("开始提取，字幕很快，语音识别会慢一些…");
+    S.asrRunning = true;
+    loadAsrCaps();
+  }).catch(function (e) { toast("启动失败：" + e.message); });
+}
+function openSuggest() {
+  Api.asrSuggest(200, 2).then(function (r) {
+    S.asrCands = r.words || [];
+    if (!S.asrCands.length) {
+      toast("还没有候选词，先点「开始提取」");
+      return;
+    }
+    renderSuggest();
+  }).catch(function (e) { toast("读取候选词失败：" + e.message); });
+}
+function renderSuggest() {
+  var cats = ["animals", "fruit", "colors", "numbers", "body", "family", "actions", "transport", "video"];
+  var h = '<h3>候选词（按出现集数排序）</h3>';
+  h += '<div class="muted" style="margin-bottom:10px">勾选要加入词库的词，中文可以直接改，' +
+    '勾了「配图」会在说到这个词的那一刻自动截一帧当连词配图。</div>';
+  h += '<div class="btnrow" style="margin-bottom:10px">' +
+    '<button class="btn sm ghost" data-act="asrall">全选</button>' +
+    '<button class="btn sm ghost" data-act="asrnone">全不选</button>' +
+    '<button class="btn sm ghost" data-act="asrframe">只勾有中文的</button></div>';
+  h += '<div class="asrlist">' + S.asrCands.map(function (w, i) {
+    return '<div class="asrrow">' +
+      '<label class="asrchk"><input type="checkbox" data-i="' + i + '"' +
+      (w.inLibrary ? ' disabled' : '') + '> <b>' + esc(w.word) + '</b>' +
+      (w.inLibrary ? ' <span class="muted">已在词库</span>' : '') + '</label>' +
+      '<input type="text" class="asrzh" data-i="' + i + '" value="' + esc(w.zh || "") + '" placeholder="中文">' +
+      '<select class="asrcat" data-i="' + i + '">' + cats.map(function (c) {
+        return '<option value="' + c + '"' + (c === w.category ? ' selected' : '') + '>' + c + '</option>';
+      }).join("") + '</select>' +
+      '<div class="muted">' + w.videoCount + ' 集 / ' + w.count + ' 次</div>' +
+      '<label class="asrchk"><input type="checkbox" class="asrimg" data-i="' + i + '" checked> 配图</label>' +
+      '<div class="muted asrsamp">“' + esc((w.sample || "").slice(0, 70)) + '”</div>' +
+      '</div>';
+  }).join("") + '</div>';
+  h += '<div class="btnrow" style="margin-top:14px">' +
+    '<button class="btn green" data-act="asrimport">导入选中的词</button>' +
+    '<button class="btn ghost" data-act="closesheet">关闭</button></div>';
+  openSheet(h);
+  bindSheet();
+}
+function importSuggest() {
+  var picked = [];
+  document.querySelectorAll(".asrlist .asrchk input[type=checkbox]:not(.asrimg)").forEach(function (cb) {
+    if (!cb.checked || cb.disabled) return;
+    var i = parseInt(cb.dataset.i, 10);
+    var w = S.asrCands[i];
+    var zh = document.querySelector('.asrzh[data-i="' + i + '"]');
+    var cat = document.querySelector('.asrcat[data-i="' + i + '"]');
+    var img = document.querySelector('.asrimg[data-i="' + i + '"]');
+    var vs = Object.keys(w.videos || {});
+    picked.push({
+      word: w.word, zh: zh ? zh.value.trim() : "", category: cat ? cat.value : "video",
+      sample: w.sample, useFrame: !!(img && img.checked),
+      videoId: vs[0] || "", time: (w.videos[vs[0]] || {}).time || w.sampleTime || 0
+    });
+  });
+  if (!picked.length) { toast("还没有勾选任何词"); return; }
+  Api.asrImport(picked).then(function (r) {
+    toast("已加入 " + r.added + " 个词" + (r.framed ? "，自动配图 " + r.framed + " 张" : ""));
+    closeSheet();
+    refreshWords();
+  }).catch(function (e) { toast("导入失败：" + e.message); });
 }
 
 /* ============ 启动 ============ */
