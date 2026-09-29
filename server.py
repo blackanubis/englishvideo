@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """小孩英语启蒙学习网页 - 后端服务
-仅使用 Python 标准库，无第三方依赖。
+仅使用 Python 标准库，无第三方依赖（语音识别为可选依赖，缺失时自动降级）。
 提供：静态页面、配置读写、目录浏览、视频扫描、ffmpeg 抽帧、
-      Range 视频流（iPad 必需）、词库、图词标注、学习记录。
+      Range 视频流（iPad 必需）、词库、图词标注、学习记录、
+      字幕/语音提取单词。
 """
 
+import asr
 import csv
 import hashlib
 import json
@@ -425,6 +427,7 @@ class Handler(BaseHTTPRequestHandler):
                 "badFormatCount": len(bad),
                 "badFormats": [v["name"] for v in bad[:10]],
                 "scan": SCAN_STATE,
+                "asr": asr.whisper_status(),
             })
             return
 
@@ -593,6 +596,88 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/reset" and self.command == "POST":
             save_json(PROGRESS_FILE, {"days": {}, "mastered": {}, "lastDate": None})
             self.send_json({"ok": True})
+            return
+
+        # ---- 字幕 / 语音提取单词 ----
+
+        if path == "/api/asr/status":
+            self.send_json({"state": asr.STATE, "caps": asr.whisper_status()})
+            return
+
+        if path == "/api/asr/start" and self.command == "POST":
+            data = self.read_body()
+            ids = (data or {}).get("ids") or []
+            force = bool((data or {}).get("force"))
+            lib = load_json(LIBRARY_FILE, [])
+            items = [v for v in lib if (not ids or v["id"] in ids)]
+            if not items:
+                self.send_json({"error": "没有可处理的视频，先扫描视频库"}, 400)
+                return
+            asr.run_job(items, force)
+            self.send_json({"ok": True, "count": len(items)})
+            return
+
+        if path == "/api/asr/suggest":
+            try:
+                limit = int(qs.get("limit", ["200"])[0])
+            except Exception:
+                limit = 200
+            try:
+                min_count = int(qs.get("minCount", ["2"])[0])
+            except Exception:
+                min_count = 2
+            self.send_json({"words": asr.suggest(limit=limit, min_count=min_count)})
+            return
+
+        if path == "/api/asr/import" and self.command == "POST":
+            data = self.read_body() or {}
+            picked = data.get("words") or []
+            lib = {v["id"]: v for v in load_json(LIBRARY_FILE, [])}
+            ann = load_json(ANNOT_FILE, {"items": {}})
+            items = ann.setdefault("items", {})
+            rows = []
+            framed = 0
+            for p in picked:
+                w = (p.get("word") or "").strip()
+                if not w:
+                    continue
+                rows.append({"word": w, "zh": p.get("zh", ""),
+                             "category": p.get("category", ""),
+                             "emoji": p.get("emoji", ""),
+                             "sentence": (p.get("sample") or "")[:80]})
+                if p.get("useFrame"):
+                    vid = (p.get("videoId") or "").strip()
+                    v = lib.get(vid)
+                    if v:
+                        url = asr.frame_for_word(vid, v.get("path"), w,
+                                                 float(p.get("time") or 0))
+                        if url:
+                            items.setdefault(w.lower(), [])
+                            if url not in items[w.lower()]:
+                                items[w.lower()].append(url)
+                                framed += 1
+            asr.append_words(rows)
+            save_json(ANNOT_FILE, ann)
+            self.send_json({"ok": True, "added": len(rows), "framed": framed})
+            return
+
+        if path == "/api/asr/clear" and self.command == "POST":
+            for d in (asr.TRANS_DIR, asr.SUB_DIR):
+                try:
+                    for n in os.listdir(d):
+                        os.remove(os.path.join(d, n))
+                except Exception:
+                    pass
+            self.send_json({"ok": True})
+            return
+
+        if path == "/api/subtitle":
+            vid = re.sub(r"[^A-Za-z0-9_-]", "", qs.get("id", [""])[0])
+            fp = os.path.join(asr.SUB_DIR, "%s.srt" % vid)
+            if not os.path.isfile(fp):
+                self.send_json({"error": "no subtitle"}, 404)
+                return
+            self.send_file(fp, "text/vtt; charset=utf-8")
             return
 
         self.send_json({"error": "unknown api"}, 404)
