@@ -708,8 +708,10 @@ function renderAnnotate() {
   var h = '<h3>图词标注</h3>';
   h += '<div class="field"><label>选择视频</label><select id="annVideo">' +
     S.videos.map(function (x) {
-      return '<option value="' + x.id + '"' + (x.id === annotVideo ? " selected" : "") + '>' +
-        esc(x.title) + '</option>';
+      // 这里显示原始文件名（不做任何改写），方便按集数核对；鼠标悬停看完整路径
+      return '<option value="' + x.id + '"' + (x.id === annotVideo ? " selected" : "") +
+        ' title="' + esc(x.displayPath || x.path || x.name) + '">' +
+        esc(x.name) + '</option>';
     }).join("") + '</select></div>';
   if (!frames.length) {
     h += '<div class="muted">这个视频还没有截图。去设置页点「重新扫描并生成截图」，等跑完再来。</div>';

@@ -169,6 +169,18 @@ def pretty_title(filename):
     return name or filename
 
 
+def natkey(s):
+    """自然排序键：001 < 002 < 010 < 100，而不是按字符串的 1 < 10 < 2"""
+    return [int(t) if t.isdigit() else t.lower()
+            for t in re.split(r"(\d+)", s or "")]
+
+
+def sort_library(lib):
+    """视频一律按原始文件名的正向（升序）自然排序返回，
+    不用 title——title 会把开头的序号剥掉，排序就乱了"""
+    return sorted(lib, key=lambda v: natkey(v.get("name") or v.get("path") or ""))
+
+
 def vid_of(path):
     return hashlib.md5(path.encode("utf-8")).hexdigest()[:12]
 
@@ -211,7 +223,9 @@ def collect_videos():
             for n in sorted(names):
                 if n.lower().endswith(VIDEO_EXT) and not n.startswith("."):
                     files.append(os.path.join(root, n))
-    return sorted(files)
+    # 与前端展示保持一致：按文件名正向自然排序
+    return sorted(files, key=lambda p: (natkey(os.path.basename(p)),
+                                        os.path.dirname(p)))
 
 
 def run_scan(full=False):
@@ -527,8 +541,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/videos":
             lib = load_json(LIBRARY_FILE, [])
-            lib.sort(key=lambda v: (v.get("title") or "", v.get("name") or ""))
-            self.send_json({"videos": lib, "scan": SCAN_STATE})
+            self.send_json({"videos": sort_library(lib), "scan": SCAN_STATE})
             return
 
         if path == "/api/stream":
