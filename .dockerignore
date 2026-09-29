@@ -1,0 +1,6 @@
+__pycache__
+*.pyc
+data/
+videos/
+需求梳理.md
+.git
