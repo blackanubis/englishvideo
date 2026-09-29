@@ -9,24 +9,46 @@
 
 ## 一、部署（飞牛OS）
 
-1. 把整个 `english-kids` 文件夹打包成 zip，上传到 NAS，例如：
-   `/vol3/1000/project/english-kids`
-2. 解压后进入目录，检查 `docker-compose.yml` 里的挂载路径：
+镜像由 GitHub Actions 自动构建（每次 push 到 `main`），推到 `ghcr.io/blackanubis/englishvideo:latest`，
+支持 `linux/amd64` 与 `linux/arm64`。NAS 上只需一个 compose 文件，不用传源码。
+
+### 方式 A：拉镜像（推荐）
+
+1. 先确认镜像包是公开的（只需一次）：
+   GitHub 仓库 → **Packages** → 点 `englishvideo` → **Package settings** → 把 Visibility 改成 **Public**
+   （不想公开的话，就在 NAS 上执行 `docker login ghcr.io`，填你的 GitHub 账号 + PAT）
+2. 把 `docker-compose.yml` 单独传到 NAS，例如 `/vol3/1000/project/english-kids/docker-compose.yml`
+3. 改挂载路径：
 
 ```yaml
       - /vol1/1000:/media/root:ro      # 改成你放视频的那一级目录（只读）
       - ./data:/app/data               # 学习记录、配置、截图，不要动
 ```
 
-3. 启动：
+4. 启动：
+
+```bash
+cd /vol3/1000/project/english-kids
+docker compose up -d
+docker compose logs -f        # 看到 "英语启蒙服务已启动" 即可
+```
+
+5. 浏览器打开 `http://<NAS的IP>:13002`
+
+> 以后代码更新了，NAS 上执行 `docker compose pull && docker compose up -d` 即可升级。
+
+### 方式 B：源码本地构建
+
+把整个仓库 zip 上传到 NAS（Actions 每次运行也会在 Artifacts 里附一份源码包），解压后：
 
 ```bash
 cd /vol3/1000/project/english-kids
 docker compose up -d --build
-docker compose logs -f        # 看到 "英语启蒙服务已启动" 即可
 ```
 
-4. 浏览器打开 `http://<NAS的IP>:13002`
+此时需要在 `docker-compose.yml` 里注释 `image:` 那行、放开 `build: .` 两行。
+
+---
 
 ## 二、第一次使用
 
@@ -99,6 +121,7 @@ Windows：设置 → 时间和语言 → 语音 → 添加英语语音。
 
 ```
 english-kids/
+├── .github/workflows/build.yml   CI：push 到 main 自动构建并推送 GHCR 镜像
 ├── Dockerfile              python:3.12-alpine + ffmpeg
 ├── docker-compose.yml      端口 13002，媒体根只读挂载
 ├── server.py               后端（Python 标准库，无第三方依赖）
