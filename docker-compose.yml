@@ -18,6 +18,14 @@ services:
       EK_MEDIA_ROOT: /media/root
       # NAS 上对应的真实路径，网页里显示路径时会做替换，方便你核对
       EK_HOST_ROOT: /vol1/1000
+      # ---- 语音识别（Whisper）----
+      # auto = 检测到 NVIDIA CUDA 就走 GPU，否则走 CPU。
+      # 注意：Intel UHD / AMD 核显不支持，只能走 CPU，设成 auto 即可自动回退
+      EK_WHISPER_DEVICE: auto
+      # CPU 线程数，0 = 自动（最多取 8）。NAS 核数少就保持 0
+      EK_WHISPER_THREADS: "0"
+      # 快速模式默认每集只听的秒数（网页里可临时改），0 = 全片
+      EK_ASR_MAX_SEC: "90"
     volumes:
       # 媒体根：只读挂载。建议挂到"放视频的那一级"目录，
       # 例如视频在 /vol1/1000/media/english-videos，这里就挂 /vol1/1000/media
@@ -25,6 +33,19 @@ services:
       - /vol1/1000:/media/root:ro
       # 数据卷：学习记录、配置、截图缓存
       - ./data:/app/data
+
+    # ---- 以下都是可选的硬件加速配置，默认全部不启用 ----
+    # ① NVIDIA 独显（Whisper 语音识别加速）：镜像默认不含 CUDA 运行时，
+    #    需要先用 Dockerfile.gpu 自行构建，再解开下面 4 行
+    # devices:
+    #   - /dev/dri:/dev/dri          # Intel 核显（仅对视频转码有用，识别无用）
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
 
 # 更新到最新版：
 #   docker compose pull && docker compose up -d

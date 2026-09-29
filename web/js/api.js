@@ -30,7 +30,9 @@ var Api = (function () {
     saveProgress: function (p) { return post("/api/progress", p); },
     reset: function () { return post("/api/reset", {}); },
     asrStatus: function () { return req("/api/asr/status"); },
-    asrStart: function (ids, force) { return post("/api/asr/start", { ids: ids || [], force: !!force }); },
+    asrStart: function (ids, force, fast, sec) {
+      return post("/api/asr/start", { ids: ids || [], force: !!force, fast: !!fast, sec: sec || 0 });
+    },
     asrSuggest: function (limit, minCount) {
       return req("/api/asr/suggest?limit=" + (limit || 200) + "&minCount=" + (minCount || 2));
     },

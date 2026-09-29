@@ -1,0 +1,52 @@
+# GPU 版：仅在「NAS 装了 NVIDIA 独显」时才有意义。
+# Intel UHD / Iris / AMD 核显用户请不要用这个——CTranslate2 不支持它们，
+# 用了也只是白涨 3GB 镜像体积，速度没有任何变化。
+#
+# 自行构建：
+#   docker build -f Dockerfile.gpu -t english-kids-gpu .
+# 然后 docker-compose.yml 里把 image 改成 english-kids-gpu，
+# 并解开 deploy.resources.reservations.devices 那几行。
+#
+# 宿主机前提：
+#   1. 已安装 NVIDIA 驱动
+#   2. 已安装 nvidia-container-toolkit（并重启 dockerd）
+#   验证：docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+
+FROM python:3.12-slim
+
+ARG WHISPER_MODEL=base
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY server.py asr.py ./
+COPY defaults ./defaults
+COPY web ./web
+
+# CUDA 运行时（约 3GB，所以主镜像不带）：ctranslate2 的 pip 轮子不含这些库
+RUN pip install --no-cache-dir faster-whisper==1.1.0 "huggingface-hub==0.26.5" requests \
+    nvidia-cublas-cu12 nvidia-cudnn-cu12
+
+# 构建时烤模型：先用 CPU 加载即可，模型文件是同一份，运行时由 EK_WHISPER_DEVICE 决定用不用 GPU
+RUN python -c "from faster_whisper import WhisperModel; \
+WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8'); \
+print('whisper model ready:', '${WHISPER_MODEL}')" \
+    || echo "[警告] Whisper 模型下载失败，字幕提取仍可用，语音识别不可用"
+
+RUN mkdir -p /media/root /app/data/thumbs
+
+# nvidia-* 的动态库不在默认搜索路径里，必须指过去，否则 ctranslate2 找不到 CUDA
+ENV LD_LIBRARY_PATH="/usr/local/lib/python3.12/site-packages/nvidia/cudnn/lib:/usr/local/lib/python3.12/site-packages/nvidia/cublas/lib:/usr/local/lib/python3.12/site-packages/nvidia/cuda_runtime/lib:${LD_LIBRARY_PATH}"
+
+ENV EK_PORT=13002 \
+    EK_DATA=/app/data \
+    EK_MEDIA_ROOT=/media/root \
+    EK_WHISPER_MODEL=${WHISPER_MODEL} \
+    EK_WHISPER_DEVICE=auto \
+    TZ=Asia/Shanghai
+
+EXPOSE 13002
+
+CMD ["python", "-u", "server.py"]

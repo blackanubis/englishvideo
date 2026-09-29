@@ -262,6 +262,11 @@ input[type="text"], input[type="number"], select {
 .empty .e { font-size: 54px; }
 
 /* 从视频提取单词：候选词表 */
+.asrmode { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.asrmode > div { flex: 1 0 100%; }
+.asrmode label { display: flex; align-items: center; gap: 6px; font-weight: 600; }
+.asrmode label input { width: 22px; height: 22px; min-height: 22px; }
+.asrmode select { min-height: 40px; padding: 6px 10px; font-size: 15px; }
 .asrlist { max-height: 52vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .asrrow {
   display: grid; grid-template-columns: 1.4fr 1fr 1fr;

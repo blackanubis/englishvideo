@@ -109,6 +109,34 @@ def have_ffmpeg():
     return shutil.which("ffmpeg") is not None and shutil.which("ffprobe") is not None
 
 
+def hw_probe():
+    """探测硬件编解码能力。
+
+    Intel UHD 核显（QSV）对 Whisper 语音识别没有任何帮助（CTranslate2 只认 NVIDIA CUDA），
+    但对「mkv/avi 转 mp4」这类转码任务可以提速数倍，所以单独探测出来供设置页显示。
+    """
+    out = {"dri": False, "driNodes": [], "qsv": False, "vaapi": False,
+           "nvidia": False}
+    try:
+        if os.path.isdir("/dev/dri"):
+            nodes = sorted(os.listdir("/dev/dri"))
+            out["dri"] = bool(nodes)
+            out["driNodes"] = nodes[:6]
+    except Exception:
+        pass
+    if shutil.which("ffmpeg"):
+        try:
+            p = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                               capture_output=True, timeout=25)
+            t = (p.stdout or b"").decode("utf-8", "replace")
+            out["qsv"] = "h264_qsv" in t
+            out["vaapi"] = "h264_vaapi" in t
+            out["nvidia"] = "h264_nvenc" in t
+        except Exception:
+            pass
+    return out
+
+
 def safe_under(child, root):
     """判断 child 是否在 root 之内，防目录穿越"""
     try:
@@ -428,6 +456,7 @@ class Handler(BaseHTTPRequestHandler):
                 "badFormats": [v["name"] for v in bad[:10]],
                 "scan": SCAN_STATE,
                 "asr": asr.whisper_status(),
+                "hw": hw_probe(),
             })
             return
 
@@ -608,13 +637,18 @@ class Handler(BaseHTTPRequestHandler):
             data = self.read_body()
             ids = (data or {}).get("ids") or []
             force = bool((data or {}).get("force"))
+            fast = bool((data or {}).get("fast"))
+            sec = float((data or {}).get("sec") or 0)
+            if sec > 0:
+                asr.FAST_SEC = sec
             lib = load_json(LIBRARY_FILE, [])
             items = [v for v in lib if (not ids or v["id"] in ids)]
             if not items:
                 self.send_json({"error": "没有可处理的视频，先扫描视频库"}, 400)
                 return
-            asr.run_job(items, force)
-            self.send_json({"ok": True, "count": len(items)})
+            asr.run_job(items, force, fast)
+            self.send_json({"ok": True, "count": len(items), "fast": fast,
+                            "sec": asr.FAST_SEC})
             return
 
         if path == "/api/asr/suggest":

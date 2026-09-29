@@ -30,6 +30,17 @@ MODEL_SIZE = os.environ.get("EK_WHISPER_MODEL", "base")
 MODEL_DIR = os.environ.get("EK_WHISPER_DIR", os.path.join(BASE_DIR, "models"))
 DICT_FILE = os.path.join(DEFAULTS_DIR, "dict-en-zh.csv")
 
+# 运行设备：auto(有 NVIDIA CUDA 就用 GPU) / cuda / cpu
+# 注意：Intel 核显、AMD 核显均不支持——CTranslate2 只认 NVIDIA CUDA
+DEVICE_PREF = os.environ.get("EK_WHISPER_DEVICE", "auto").strip().lower()
+THREADS = int(os.environ.get("EK_WHISPER_THREADS", "0") or 0)
+# 快速模式：每集只转写前 N 秒（0 = 全片）。儿歌词汇重复度高，
+# 前 90~120 秒基本能覆盖全部生词，速度提升 3~5 倍
+FAST_SEC = float(os.environ.get("EK_ASR_MAX_SEC", "0") or 0)
+
+DEVICE_INFO = {"device": None, "compute": None, "threads": 0,
+               "cuda": False, "cudaName": None, "fast": FAST_SEC}
+
 SUB_EXT = (".srt", ".vtt", ".ass", ".ssa")
 
 STATE = {
@@ -118,25 +129,70 @@ def model_ready():
     return False
 
 
+def cuda_count():
+    """返回可用的 NVIDIA GPU 数量。Intel / AMD 核显一律返回 0"""
+    try:
+        import ctranslate2
+        return ctranslate2.get_cuda_device_count()
+    except Exception:
+        return 0
+
+
+def cuda_name():
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name",
+                              "--format=csv,noheader"],
+                             capture_output=True, timeout=10)
+        return (out.stdout.decode().strip().splitlines() or [""])[0] or None
+    except Exception:
+        return None
+
+
 def whisper_status():
+    n = cuda_count()
     return {
         "ffmpeg": have_ffmpeg(),
         "whisper": have_whisper(),
         "modelReady": model_ready(),
         "modelSize": MODEL_SIZE,
         "modelDir": MODEL_DIR,
+        "cuda": n,
+        "cudaName": cuda_name() if n else None,
+        "prefer": DEVICE_PREF,
+        "runtime": DEVICE_INFO,
+        "cores": os.cpu_count() or 1,
+        "fastSec": FAST_SEC,
     }
 
 
 def load_model():
     global _MODEL
-    if _MODEL is None:
-        from faster_whisper import WhisperModel
-        if os.path.isdir(MODEL_DIR) and os.listdir(MODEL_DIR):
-            # 外部挂载的模型目录，直接用本地路径加载
-            _MODEL = WhisperModel(MODEL_DIR, device="cpu", compute_type="int8")
-        else:
-            _MODEL = WhisperModel(MODEL_SIZE, device="cpu", compute_type="int8")
+    if _MODEL is not None:
+        return _MODEL
+    from faster_whisper import WhisperModel
+
+    n = cuda_count()
+    device, compute = "cpu", "int8"
+    if DEVICE_PREF in ("auto", "cuda") and n > 0:
+        device, compute = "cuda", "float16"
+    if DEVICE_PREF == "cpu":
+        device, compute = "cpu", "int8"
+
+    threads = THREADS or max(1, min(8, os.cpu_count() or 4))
+    path = MODEL_DIR if (os.path.isdir(MODEL_DIR) and os.listdir(MODEL_DIR)) \
+        else MODEL_SIZE
+    kwargs = {"device": device, "compute_type": compute}
+    if device == "cpu":
+        kwargs["cpu_threads"] = threads
+    _MODEL = WhisperModel(path, **kwargs)
+
+    DEVICE_INFO.update({"device": device, "compute": compute, "cuda": n > 0,
+                        "cudaName": cuda_name() if n else None,
+                        "threads": threads if device == "cpu" else 0,
+                        "fast": FAST_SEC})
+    print("[asr] 识别引擎：%s / %s%s" % (
+        device, compute,
+        " (%d 线程)" % threads if device == "cpu" else " (GPU)"))
     return _MODEL
 
 
@@ -259,16 +315,24 @@ def load_subtitle_file(path):
 
 # ---------- 转写 ----------
 
-def transcribe_audio(video_path):
-    """ffmpeg 抽 16k 单声道 wav → faster-whisper 转写（带词级时间戳）"""
+def transcribe_audio(video_path, max_sec=0):
+    """ffmpeg 抽 16k 单声道 wav → faster-whisper 转写（带词级时间戳）
+
+    max_sec > 0 时只取前 max_sec 秒（快速模式），用于只要词表、不要完整字幕。
+    """
     if not have_ffmpeg() or not have_whisper():
         return []
+    if max_sec <= 0:
+        max_sec = FAST_SEC
     os.makedirs(AUDIO_DIR, exist_ok=True)
     wav = os.path.join(AUDIO_DIR, "%d.wav" % time.time_ns())
     try:
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", video_path,
-                        "-vn", "-ac", "1", "-ar", "16000", "-f", "wav", wav],
-                       capture_output=True, timeout=600)
+        cmd = ["ffmpeg", "-y", "-v", "error", "-i", video_path,
+               "-vn", "-ac", "1", "-ar", "16000"]
+        if max_sec > 0:
+            cmd += ["-t", str(max_sec)]
+        cmd += ["-f", "wav", wav]
+        subprocess.run(cmd, capture_output=True, timeout=600)
         if not os.path.exists(wav):
             return []
         model = load_model()
@@ -324,8 +388,11 @@ def transcript_path(vid):
     return os.path.join(TRANS_DIR, "%s.json" % vid)
 
 
-def ensure_transcript(item, force=False):
-    """返回 (source, segments)。source: subtitle | asr | none"""
+def ensure_transcript(item, force=False, fast=False):
+    """返回 (source, segments)。source: subtitle | asr | none
+
+    fast=True 时语音识别只跑前 FAST_SEC 秒，且不生成完整字幕文件。
+    """
     os.makedirs(TRANS_DIR, exist_ok=True)
     tp = transcript_path(item["id"])
     if not force and os.path.exists(tp):
@@ -357,11 +424,12 @@ def ensure_transcript(item, force=False):
             pass
 
     if not segments:
-        segments = transcribe_audio(item["path"])
+        segments = transcribe_audio(item["path"], FAST_SEC if fast else 0)
         if segments:
             source = "asr"
 
-    if segments and source == "asr":
+    # 快速模式的字幕是残缺的，不写入（播放页的 CC 只认完整字幕）
+    if segments and source == "asr" and not fast:
         try:
             write_srt(item["id"], segments)
         except Exception:
@@ -369,22 +437,29 @@ def ensure_transcript(item, force=False):
 
     with open(tp, "w", encoding="utf-8") as f:
         json.dump({"id": item["id"], "title": item.get("title"), "source": source,
-                   "segments": segments, "at": time.time()}, f, ensure_ascii=False)
+                   "segments": segments, "at": time.time(), "fast": bool(fast)},
+                  f, ensure_ascii=False)
     return source, segments
 
 
-def run_job(items, force=False):
+def run_job(items, force=False, fast=False):
     if STATE["running"]:
         return
     STATE.update({"running": True, "message": "准备中", "total": len(items),
-                  "done": 0, "startedAt": time.time(), "results": []})
+                  "done": 0, "startedAt": time.time(), "results": [],
+                  "fast": bool(fast)})
 
     def worker():
         results = []
+        if fast:
+            try:
+                load_model()  # 提前加载，避免把首次加载算进第一个视频
+            except Exception:
+                pass
         try:
             for i, item in enumerate(items):
                 STATE["message"] = "处理 %d/%d：%s" % (i + 1, len(items), item.get("title"))
-                src, segs = ensure_transcript(item, force)
+                src, segs = ensure_transcript(item, force, fast)
                 results.append({"id": item["id"], "title": item.get("title"),
                                 "source": src, "segments": len(segs)})
                 STATE["results"] = results

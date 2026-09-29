@@ -589,6 +589,16 @@ function viewParent() {
     '<div class="muted">优先读视频自带的字幕；没有字幕就用语音识别转写。' +
     '提取完会出一张候选词表，你勾选后进入跟读和连词。</div>' +
     '<div id="asrCaps" class="muted" style="margin-top:8px"></div>' +
+    '<div class="asrmode" style="margin-top:12px">' +
+    '<label><input type="checkbox" id="asrFast" checked> 快速模式</label>' +
+    '<select id="asrSec">' +
+    '<option value="60">每集只听前 60 秒</option>' +
+    '<option value="90" selected>每集只听前 90 秒</option>' +
+    '<option value="120">每集只听前 120 秒</option>' +
+    '<option value="180">每集只听前 180 秒</option>' +
+    '</select>' +
+    '<div class="muted" style="margin-top:4px">儿歌词汇重复度高，听前一两分钟就能拿到几乎全部生词，' +
+    '速度提升 3~5 倍。缺点是<b>不生成完整字幕</b>，要字幕就取消勾选。</div></div>' +
     '<div class="btnrow" style="margin-top:12px">' +
     '<button class="btn orange" data-act="asrstart">开始提取</button>' +
     '<button class="btn" data-act="asrsuggest">查看候选词</button>' +
@@ -967,8 +977,34 @@ function loadHealth() {
       '<div class="stat"><span class="muted">iPad 可能播不了</span><b>' + (h.badFormatCount || 0) + ' 个</b></div>' +
       (bad.length ? '<div class="muted" style="margin-top:8px">建议转成 mp4：' +
         bad.map(esc).join("、") + '</div>' : '') +
+      hwLine(h.hw, h.asr) +
       '<div class="muted" style="margin-top:8px">服务端口 13002 · 仅局域网访问</div>';
   });
+}
+
+/* 硬件加速能力：Intel 核显只帮得上转码，帮不上语音识别 */
+function hwLine(hw, asr) {
+  hw = hw || {};
+  asr = asr || {};
+  var gpu = (asr.cuda || 0) > 0;
+  var lines = [];
+  lines.push('<div class="stat"><span class="muted">语音识别引擎</span><b>' +
+    (gpu ? 'GPU ' + esc(asr.cudaName || 'NVIDIA') : 'CPU' +
+      ((asr.runtime && asr.runtime.device === "cpu" && asr.runtime.threads)
+        ? ' ' + asr.runtime.threads + ' 线程' : '')) + '</b></div>');
+  if (hw.qsv || hw.vaapi) {
+    lines.push('<div class="stat"><span class="muted">视频转码硬件加速</span><b>' +
+      (hw.qsv ? 'Intel QSV ✅' : 'VAAPI ✅') + '</b></div>');
+  } else if (hw.dri) {
+    lines.push('<div class="stat"><span class="muted">核显设备</span><b>已识别但缺驱动</b></div>');
+  } else {
+    lines.push('<div class="stat"><span class="muted">视频转码硬件加速</span><b>无（走 CPU）</b></div>');
+  }
+  lines.push('<div class="muted" style="margin-top:6px">' +
+    (gpu ? 'NVIDIA 独显可用，语音识别走 GPU。'
+         : 'Intel / AMD 核显不能加速语音识别（模型只支持 NVIDIA CUDA），' +
+           '只能用「快速模式」少听几分钟来提速。') + '</div>');
+  return lines.join("");
 }
 
 /* ============ 从视频提取单词 ============ */
@@ -979,11 +1015,19 @@ function loadAsrCaps() {
     var el = document.getElementById("asrCaps");
     if (el) {
       var c = S.asrCaps;
+      var rt = c.runtime || {};
+      var engine = c.cuda > 0
+        ? 'GPU（' + esc(c.cudaName || 'NVIDIA') + '）'
+        : (rt.device === "cpu" && rt.threads
+          ? 'CPU ' + rt.threads + ' 线程 / 共 ' + (c.cores || '?') + ' 核'
+          : 'CPU');
       el.innerHTML = 'ffmpeg ' + (c.ffmpeg ? '✅' : '⚠️') +
         ' · 语音识别 ' + (c.whisper ? '✅' : '⚠️ 未安装') +
-        ' · 模型 ' + (c.modelReady ? '已就绪（' + esc(c.modelSize || '') + '）' : '未就绪') +
+        ' · 模型 ' + (c.modelReady ? esc(c.modelSize || '') : '未就绪') +
+        ' · 引擎 <b>' + engine + '</b>' +
+        (c.cuda > 0 ? '' : '<span class="muted">（Intel / AMD 核显不支持加速，只能走 CPU）</span>') +
         '<br>' + (c.whisper && c.modelReady
-          ? '没有字幕的视频会自动转写，比较慢，可以挂着跑'
+          ? '没有字幕的视频会自动转写。用「快速模式」只听前一两分钟，快很多'
           : '只能提取已有字幕的视频；想用语音识别需要带模型的镜像');
     }
     var info = document.getElementById("asrInfo");
@@ -994,8 +1038,13 @@ function loadAsrCaps() {
 function startAsr(force) {
   if (!S.videos.length) { toast("先扫描视频再来提取"); return; }
   var ids = S.videos.map(function (v) { return v.id; });
-  Api.asrStart(ids, force).then(function () {
-    toast("开始提取，字幕很快，语音识别会慢一些…");
+  var cb = document.getElementById("asrFast");
+  var sel = document.getElementById("asrSec");
+  var fast = !!(cb && cb.checked);
+  var sec = parseInt((sel && sel.value) || "90", 10);
+  Api.asrStart(ids, force, fast, sec).then(function () {
+    toast(fast ? ("开始提取（快速模式，每集听前 " + sec + " 秒）")
+               : "开始提取，字幕很快，语音识别会慢一些…");
     S.asrRunning = true;
     loadAsrCaps();
   }).catch(function (e) { toast("启动失败：" + e.message); });
