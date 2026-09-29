@@ -29,6 +29,13 @@ var Api = (function () {
     progress: function () { return req("/api/progress"); },
     saveProgress: function (p) { return post("/api/progress", p); },
     reset: function () { return post("/api/reset", {}); },
+    asrStatus: function () { return req("/api/asr/status"); },
+    asrStart: function (ids, force) { return post("/api/asr/start", { ids: ids || [], force: !!force }); },
+    asrSuggest: function (limit, minCount) {
+      return req("/api/asr/suggest?limit=" + (limit || 200) + "&minCount=" + (minCount || 2));
+    },
+    asrImport: function (words) { return post("/api/asr/import", { words: words }); },
+    asrClear: function () { return post("/api/asr/clear", {}); },
     streamUrl: function (v) { return "/api/stream?id=" + encodeURIComponent(v.id); }
   };
 })();
