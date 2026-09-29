@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+data/
+videos/*
+!videos/.gitkeep
+.DS_Store
