@@ -260,3 +260,18 @@ input[type="text"], input[type="number"], select {
 
 .empty { text-align: center; padding: 40px 20px; color: var(--ink2); }
 .empty .e { font-size: 54px; }
+
+/* 从视频提取单词：候选词表 */
+.asrlist { max-height: 52vh; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.asrrow {
+  display: grid; grid-template-columns: 1.4fr 1fr 1fr;
+  align-items: center; gap: 8px 10px;
+  padding: 10px 2px; border-bottom: 1px solid var(--line);
+}
+.asrrow .asrsamp { grid-column: 1 / -1; font-size: 13px; }
+.asrchk { display: flex; align-items: center; gap: 6px; font-size: 15px; }
+.asrchk input { width: 22px; height: 22px; min-height: 22px; }
+.asrzh, .asrcat { min-height: 42px; }
+@media (max-width: 560px) {
+  .asrrow { grid-template-columns: 1fr 1fr; }
+}
