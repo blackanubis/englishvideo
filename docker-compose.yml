@@ -1,7 +1,10 @@
 services:
   english-kids:
-    build: .
-    image: english-kids:1.0
+    # 镜像由 GitHub Actions 自动构建并推送到 GHCR（每次 push 到 main 触发）
+    image: ghcr.io/blackanubis/englishvideo:latest
+    # 想用本地源码构建时，把上面 image 那行注释掉，放开下面两行：
+    # build: .
+    # image: english-kids:1.0
     container_name: english-kids
     restart: unless-stopped
     # 只在局域网使用，不要在路由器上做端口映射
@@ -22,3 +25,6 @@ services:
       - /vol1/1000:/media/root:ro
       # 数据卷：学习记录、配置、截图缓存
       - ./data:/app/data
+
+# 更新到最新版：
+#   docker compose pull && docker compose up -d
