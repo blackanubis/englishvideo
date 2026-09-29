@@ -16,7 +16,9 @@ COPY web ./web
 
 # 构建时把 Whisper 模型烤进镜像：这样 NAS 运行时不用联网拉模型
 # （构建机需要能访问 huggingface.co；GitHub Actions 可以，本地构建若被墙可跳过）
-RUN pip install --no-cache-dir faster-whisper==1.1.0 \
+# 注意：huggingface_hub 新版不再自带 requests，faster-whisper 加载模型时会用到，必须显式装；
+# 同时把 hub 锁在 0.26.x（faster-whisper 1.1.0 验证过的版本）
+RUN pip install --no-cache-dir faster-whisper==1.1.0 "huggingface-hub==0.26.5" requests \
     && python -c "from faster_whisper import WhisperModel; \
 WhisperModel('${WHISPER_MODEL}', device='cpu', compute_type='int8'); \
 print('whisper model ready:', '${WHISPER_MODEL}')" \
