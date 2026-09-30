@@ -48,6 +48,7 @@ DEFAULT_CONFIG = {
     "categories": ["animals", "fruit", "colors", "numbers"],
     "wordsPerDay": 10,
     "pairsPerRound": 6,
+    "reviewWords": 10,
     "frameInterval": 15,
     "maxFramesPerVideo": 40,
     "lastVideo": None,

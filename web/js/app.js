@@ -12,6 +12,7 @@ var S = {
   player: null,      // {id, time}
   speakIdx: 0,
   game: null,
+  review: null,      // {words, idx, phase:"speak"|"game"|"done", readCount}
   videoHinted: false,
   asrCands: [],   // 从字幕/语音提取出来的候选词
   asrCaps: null,  // {ffmpeg, whisper, modelReady, modelSize}
@@ -183,13 +184,15 @@ function render() {
     b.classList.toggle("on", b.dataset.tab === S.route);
   });
   stopTimer();
-  if (S.route === "speak" || S.route === "game" || S.route === "summary") startTimer(S.route);
+  if (S.route === "speak" || S.route === "game" || S.route === "summary" ||
+    S.route === "review") startTimer(S.route);
   updateHeader();
 
   var v = document.getElementById("view");
   if (S.route === "video") v.innerHTML = viewVideo();
   else if (S.route === "speak") v.innerHTML = viewSpeak();
   else if (S.route === "game") v.innerHTML = viewGame();
+  else if (S.route === "review") v.innerHTML = viewReview();
   else if (S.route === "summary") v.innerHTML = viewSummary();
   else if (S.route === "parent") v.innerHTML = viewParent();
   else v.innerHTML = viewToday();
@@ -221,6 +224,13 @@ function viewToday() {
   h += taskCard("🗣️", "跟读单词", readCount + " / " + sTarget + " 个词", sDone, "speak");
   h += taskCard("🧩", "看图连词", (d.game ? d.game.rounds : 0) + " 轮 · 正确 " +
     (d.game ? d.game.right : 0) + " 次", gDone, "game");
+
+  // 复习：至少学过 3 个词才出现，避免一开始就有空任务
+  var rv = d.review || {};
+  if (learnedCount() >= 3) {
+    h += taskCard("🔁", "复习单词", (rv.count || 0) + " / " +
+      (S.config.reviewWords || 10) + " 个词", !!rv.done, "review");
+  }
   h += taskCard("🏆", "学习总结", sumDone ? "已查看" : "看看今天的收获", sumDone, "summary");
 
   if (allDone) {
@@ -340,9 +350,149 @@ function markRead(ok) {
   if (ok) d.words[w.word].ok = true;
   if (ok) {
     S.progress.mastered[w.word] = (S.progress.mastered[w.word] || 0) + 1;
+    touchLearned(w.word, "read");
     toast("真棒！" + w.word + " 学会了");
   }
   saveProgress();
+}
+
+/* ---- 学习档案：复习功能的数据来源 ----
+   progress.learned = { word: {read, match, reviewed, first, last, zh, emoji} }
+   read    = 跟读掌握次数
+   match   = 连词连对次数
+   reviewed= 被复习抽中次数 */
+function learnedMap() {
+  if (!S.progress.learned) S.progress.learned = {};
+  return S.progress.learned;
+}
+function findWord(w) {
+  for (var i = 0; i < S.words.length; i++) {
+    if (S.words[i].word === w) return S.words[i];
+  }
+  return null;
+}
+function touchLearned(word, kind) {
+  if (!word) return;
+  var L = learnedMap();
+  var e = L[word] || { read: 0, match: 0, reviewed: 0 };
+  e[kind] = (e[kind] || 0) + 1;
+  var k = todayKey();
+  if (!e.first) e.first = k;
+  e.last = k;
+  var w = findWord(word);
+  if (w && !e.zh) { e.zh = w.zh; e.emoji = w.emoji; }
+  L[word] = e;
+  saveProgress();
+}
+/* 老数据迁移：把历史跟读记录和 mastered 补进 learned，
+   这样装了新版本也能复习以前学过的词 */
+function migrateLearned() {
+  var L = learnedMap();
+  var days = S.progress.days || {};
+  Object.keys(days).forEach(function (k) {
+    var ws = (days[k] || {}).words || {};
+    Object.keys(ws).forEach(function (w) {
+      if (!ws[w] || !ws[w].ok) return;
+      var e = L[w] || { read: 0, match: 0, reviewed: 0 };
+      e.read = Math.max(e.read || 0, 1);
+      if (!e.first || k < e.first) e.first = k;
+      if (!e.last || k > e.last) e.last = k;
+      var wo = findWord(w);
+      if (wo && !e.zh) { e.zh = wo.zh; e.emoji = wo.emoji; }
+      L[w] = e;
+    });
+  });
+  var m = S.progress.mastered || {};
+  Object.keys(m).forEach(function (w) {
+    var e = L[w] || { read: 0, match: 0, reviewed: 0 };
+    e.read = Math.max(e.read || 0, m[w] || 0);
+    if (!e.first) e.first = todayKey();
+    if (!e.last) e.last = todayKey();
+    L[w] = e;
+  });
+}
+function daysSince(dateStr) {
+  if (!dateStr) return 999;
+  var a = new Date(dateStr + "T00:00:00");
+  var b = new Date(todayKey() + "T00:00:00");
+  if (isNaN(a.getTime())) return 999;
+  return Math.max(0, Math.round((b - a) / 86400000));
+}
+/* 抽复习词：越久没碰、掌握得越少的越优先；再在候选里随机取，
+   保证每次复习的词不完全一样 */
+function pickReview(n) {
+  var L = learnedMap();
+  var pool = Object.keys(L).filter(function (w) {
+    var e = L[w] || {};
+    return ((e.read || 0) + (e.match || 0)) > 0;
+  });
+  if (!pool.length) return [];
+  pool.sort(function (a, b) {
+    var ea = L[a], eb = L[b];
+    var ga = daysSince(ea.last), gb = daysSince(eb.last);
+    if (ga !== gb) return gb - ga;                    // 久未复习优先
+    var ma = (ea.read || 0) + (ea.match || 0);
+    var mb = (eb.read || 0) + (eb.match || 0);
+    if (ma !== mb) return ma - mb;                    // 掌握得少的优先
+    return (ea.reviewed || 0) - (eb.reviewed || 0);
+  });
+  var take = pool.slice(0, Math.max(n * 2, n + 2));
+  return shuffle(take).slice(0, Math.min(n, take.length));
+}
+function reviewWordsToObjs(keys) {
+  var L = learnedMap();
+  return keys.map(function (k) {
+    var e = L[k] || {};
+    var w = findWord(k) || {};
+    var a = S.ann[String(k).toLowerCase()];
+    return {
+      word: k,
+      zh: w.zh || e.zh || "",
+      emoji: w.emoji || e.emoji || "",
+      img: (a && a.length) ? a[Math.floor(Math.random() * a.length)] : null
+    };
+  });
+}
+function startReview() {
+  var n = S.config.reviewWords || 10;
+  var keys = pickReview(n);
+  if (!keys.length) {
+    toast("还没有学过的单词，先去跟读和连词吧");
+    return;
+  }
+  S.review = { words: reviewWordsToObjs(keys), idx: 0, phase: "speak", readCount: 0 };
+  render();
+}
+function markReviewed(ok) {
+  var r = S.review;
+  if (!r) return;
+  var w = r.words[r.idx];
+  if (ok && w) {
+    var L = learnedMap();
+    var e = L[w.word] || { read: 0, match: 0, reviewed: 0 };
+    e.reviewed = (e.reviewed || 0) + 1;
+    e.last = todayKey();
+    L[w.word] = e;
+    touchLearned(w.word, "read");
+    r.readCount++;
+  }
+  if (r.idx < r.words.length - 1) {
+    r.idx++;
+  } else {
+    r.phase = "game";
+    newRound(r.words);
+  }
+  saveProgress();
+  render();
+}
+function finishReview() {
+  var r = S.review;
+  if (!r) return;
+  r.phase = "done";
+  var d = today();
+  d.review = { count: r.words.length, done: true, at: Date.now() };
+  saveProgress();
+  render();
 }
 function nextWord(auto) {
   if (S.speakIdx < S.speakList.length - 1) {
@@ -380,14 +530,15 @@ function startRecord() {
 }
 
 /* ============ 页面：看图连词 ============ */
-function newRound() {
+function newRound(words) {
   var n = S.config.pairsPerRound || 6;
-  var words = pickWords(Math.min(n, S.words.length || n));
+  // 复习的连词会直接传入指定词表；普通连词才从词库随机抽
+  if (!words) words = pickWords(Math.min(n, S.words.length || n));
   words = words.map(function (w) {
     var a = S.ann[String(w.word).toLowerCase()];
     return {
       word: w.word, zh: w.zh, emoji: w.emoji,
-      img: (a && a.length) ? a[Math.floor(Math.random() * a.length)] : null
+      img: w.img || ((a && a.length) ? a[Math.floor(Math.random() * a.length)] : null)
     };
   });
   // 注意：left / right 是左右两列的索引数组；
@@ -400,13 +551,9 @@ function newRound() {
     rightCount: 0, wrongCount: 0, start: Date.now(), finished: false
   };
 }
-function viewGame() {
-  if (!S.words.length) return '<div class="empty"><div class="e">🧩</div><p>词库为空</p></div>';
-  if (!S.game) newRound();
-  var g = S.game;
-  var h = '<div class="section-title">🧩 看图连单词</div>';
-  h += '<div class="muted" style="margin-bottom:8px">先点一张图片，再点右边的单词，连对了会有一条绿线</div>';
-  h += '<div class="card"><div class="board" id="board">' +
+/* 连词棋盘：普通连词和复习连词共用同一套渲染 */
+function gameBoardHtml(g) {
+  return '<div class="board" id="board">' +
     '<svg class="lines" id="lines"></svg>' +
     '<div class="col" id="colL">' + g.left.map(function (wi) {
       var w = g.words[wi];
@@ -419,7 +566,15 @@ function viewGame() {
       var cls = g.matched[wi] ? " done" : "";
       return '<div class="wd' + cls + '" data-act="wd" data-i="' + wi + '">' + esc(w.word) + '</div>';
     }).join("") + '</div></div>';
-  h += '<div class="btnrow" style="margin-top:14px">' +
+}
+function viewGame() {
+  if (!S.words.length) return '<div class="empty"><div class="e">🧩</div><p>词库为空</p></div>';
+  if (!S.game) newRound();
+  var g = S.game;
+  var h = '<div class="section-title">🧩 看图连单词</div>';
+  h += '<div class="muted" style="margin-bottom:8px">先点一张图片，再点右边的单词，连对了会有一条绿线</div>';
+  h += '<div class="card">' + gameBoardHtml(g) +
+    '<div class="btnrow" style="margin-top:14px">' +
     '<button class="btn sm ghost" data-act="newround">换一组</button>' +
     '<button class="btn sm" data-act="go" data-route="summary">看总结 ›</button></div></div>';
 
@@ -471,6 +626,7 @@ function onPickWord(i) {
     g.matched[i] = true;
     g.rightCount++;
     g.sel = null;
+    touchLearned(g.words[i].word, "match");   // 连对也算一次掌握，复习会优先抽这些词
     speak(g.words[i].word);
     var d = today();
     d.game.right = (d.game.right || 0) + 1;
@@ -494,6 +650,107 @@ function onPickWord(i) {
   }
 }
 
+/* ============ 页面：复习 ============ */
+function learnedCount() {
+  var L = learnedMap();
+  return Object.keys(L).filter(function (w) {
+    var e = L[w] || {};
+    return ((e.read || 0) + (e.match || 0)) > 0;
+  }).length;
+}
+function learnedKeys() {
+  var L = learnedMap();
+  return Object.keys(L).filter(function (w) {
+    var e = L[w] || {};
+    return ((e.read || 0) + (e.match || 0)) > 0;
+  });
+}
+function viewReview() {
+  var r = S.review;
+  var n = S.config.reviewWords || 10;
+  var total = learnedCount();
+
+  // 入口
+  if (!r) {
+    var h = '<div class="section-title">🔁 复习学过的单词</div>';
+    h += '<div class="card"><div style="font-weight:700;margin-bottom:6px">已经学过 ' + total + ' 个词</div>' +
+      '<div class="muted">从跟读和连词里学过的词中，挑最容易忘的来复习：' +
+      '先逐个读一遍，再做一轮连词。越久没碰、掌握得越少的词越容易被抽到。</div>' +
+      '<div class="btnrow" style="margin-top:12px">' +
+      (total
+        ? '<button class="btn orange" data-act="reviewstart">开始复习（' + Math.min(n, total) + ' 个词）</button>'
+        : '<button class="btn" data-act="go" data-route="speak">先去跟读单词</button>') +
+      '</div></div>';
+    if (total) {
+      var L = learnedMap();
+      var keys = learnedKeys().sort(function (a, b) {
+        return (L[b].last || "") < (L[a].last || "") ? -1 : 1;
+      }).slice(0, 40);
+      h += '<div class="card"><div style="font-weight:700;margin-bottom:8px">学过的词</div>' +
+        '<div class="chips">' + keys.map(function (k) {
+          var e = L[k] || {};
+          return '<span class="chip">' + esc(k) +
+            (e.zh ? ' <span class="muted">' + esc(e.zh) + '</span>' : '') +
+            ' <span class="muted">读' + (e.read || 0) + '·连' + (e.match || 0) + '</span></span>';
+        }).join("") + '</div></div>';
+    }
+    return h;
+  }
+
+  // 阶段一：发音复习
+  if (r.phase === "speak") {
+    var w = r.words[r.idx];
+    var hs = '<div class="section-title">🔁 复习发音（' + (r.idx + 1) + '/' + r.words.length + '）</div>';
+    hs += '<div class="card wordcard">' +
+      '<div class="wpic">' + wordImage(w) + '</div>' +
+      '<div class="wword">' + esc(w.word) + '</div>' +
+      '<div class="wzh">' + esc(w.zh) + '</div>' +
+      '<div class="btnrow" style="margin-top:18px;justify-content:center">' +
+      '<button class="btn orange" data-act="reviewlisten">🔊 听发音</button>' +
+      '<button class="btn green" data-act="reviewread">✅ 我读过了</button>' +
+      '<button class="btn ghost" data-act="reviewskip">跳过</button>' +
+      '</div>' +
+      '<div class="dots">' + r.words.map(function (x, i) {
+        var cls = i < r.idx ? "ok" : (i === r.idx ? "on" : "");
+        return '<span class="dot ' + cls + '"></span>';
+      }).join("") + '</div>' +
+      '<div class="muted" style="margin-top:10px">已读 ' + r.readCount + ' 个</div></div>';
+    return hs;
+  }
+
+  // 阶段二：连词复习
+  if (r.phase === "game") {
+    var g = S.game;
+    var hg = '<div class="section-title">🔁 复习连词</div>';
+    hg += '<div class="muted" style="margin-bottom:8px">把刚才复习的 ' + r.words.length +
+      ' 个词连起来，先点图片再点单词</div>';
+    if (!g) { newRound(r.words); g = S.game; }
+    hg += '<div class="card">' + gameBoardHtml(g) + '</div>';
+    if (g.finished) {
+      hg += '<div class="card" style="text-align:center"><div style="font-size:40px">🎉</div>' +
+        '<div style="font-size:18px;font-weight:700">全部连对啦</div>' +
+        '<div class="muted">连对 ' + g.rightCount + ' 次 · 错 ' + g.wrongCount + ' 次</div>' +
+        '<div style="margin-top:12px"><button class="btn green" data-act="reviewdone">完成复习</button></div></div>';
+    } else {
+      hg += '<div class="btnrow" style="margin-top:14px">' +
+        '<button class="btn sm ghost" data-act="reviewnewround">换一种连法</button>' +
+        '<button class="btn sm" data-act="reviewdone">结束复习</button></div>';
+    }
+    return hg;
+  }
+
+  // 完成
+  var hd = '<div class="section-title">🔁 复习完成</div>';
+  hd += '<div class="card" style="text-align:center"><div style="font-size:44px">🏅</div>' +
+    '<div style="font-size:18px;font-weight:700;margin-top:6px">复习了 ' + r.words.length + ' 个词</div>' +
+    '<div class="muted" style="margin-top:8px">' +
+    r.words.map(function (x) { return esc(x.word); }).join("、") + '</div>' +
+    '<div class="btnrow" style="margin-top:14px;justify-content:center">' +
+    '<button class="btn" data-act="reviewstart">再换一组</button>' +
+    '<button class="btn ghost" data-act="go" data-route="today">回今日</button></div></div>';
+  return hd;
+}
+
 /* ============ 页面：总结 ============ */
 function viewSummary() {
   var d = today();
@@ -510,6 +767,7 @@ function viewSummary() {
   h += '<div class="card">' + row("看视频", fmtMin(d.videoSec) + " 分钟 · " + d.videos.length + " 集") +
     row("跟读单词", Object.keys(d.words || {}).length + " 个") +
     row("连词游戏", d.game.rounds + " 轮 · 正确率 " + rate + "%") +
+    (d.review && d.review.done ? row("复习单词", d.review.count + " 个 ✅") : "") +
     row("学习总结", "已打卡 ✅") + '</div>';
 
   if (d.videos.length) {
@@ -617,6 +875,7 @@ function viewParent() {
     field("看图连词（分钟）", '<input type="number" id="cfGame" value="' + (p.game || 5) + '">') +
     field("每天跟读词数", '<input type="number" id="cfWords" value="' + (cfg.wordsPerDay || 10) + '">') +
     field("连词每组对数", '<input type="number" id="cfPairs" value="' + (cfg.pairsPerRound || 6) + '">') +
+    field("每次复习词数", '<input type="number" id="cfReview" value="' + (cfg.reviewWords || 10) + '">') +
     field("抽帧间隔（秒）", '<input type="number" id="cfFrame" value="' + (cfg.frameInterval || 15) + '">') +
     '<button class="btn" data-act="savesettings">保存设置</button></div>';
 
@@ -818,6 +1077,15 @@ function bind() {
     else if (act === "pic") onPickPic(parseInt(el.dataset.i, 10));
     else if (act === "wd") onPickWord(parseInt(el.dataset.i, 10));
     else if (act === "newround") { newRound(); render(); }
+    else if (act === "reviewstart") startReview();
+    else if (act === "reviewlisten") {
+      if (S.review) speak(S.review.words[S.review.idx].word);
+    } else if (act === "reviewread") markReviewed(true);
+    else if (act === "reviewskip") markReviewed(false);
+    else if (act === "reviewdone") finishReview();
+    else if (act === "reviewnewround") {
+      if (S.review) { newRound(S.review.words); render(); }
+    }
     else if (act === "browse") openBrowse();
     else if (act === "scan") doScan(false);
     else if (act === "scanfull") doScan(true);
@@ -933,6 +1201,7 @@ function saveSettings() {
     },
     wordsPerDay: n("cfWords", 10),
     pairsPerRound: n("cfPairs", 6),
+    reviewWords: n("cfReview", 10),
     frameInterval: n("cfFrame", 15)
   };
   Api.saveConfig(cfg).then(function (r) {
@@ -1120,7 +1389,7 @@ function importSuggest() {
 /* ============ 启动 ============ */
 function init() {
   var hash = (location.hash || "").replace("#/", "");
-  S.route = ["today", "video", "speak", "game", "summary", "parent"].indexOf(hash) >= 0 ? hash : "today";
+  S.route = ["today", "video", "speak", "game", "review", "summary", "parent"].indexOf(hash) >= 0 ? hash : "today";
 
   Promise.all([
     Api.config(), Api.videos(), Api.words(), Api.progress(), Api.annotations(), Api.categories()
@@ -1133,6 +1402,7 @@ function init() {
     if (!S.progress.mastered) S.progress.mastered = {};
     S.ann = (r[4] && r[4].items) || {};
     S.cats = r[5].categories || [];
+    if (!S.progress.learned) migrateLearned();
     today();
     render();
   }).catch(function (e) {
