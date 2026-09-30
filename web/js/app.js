@@ -261,6 +261,7 @@ function viewVideo() {
   h += '<video class="player" id="player" playsinline controls preload="metadata" ' +
     (cur.cover ? 'poster="' + esc(cur.cover) + '"' : '') +
     ' src="' + Api.streamUrl(cur) + '"></video>';
+  h += '<div class="viderr" id="vidErr"></div>';
   h += '<div class="card"><div class="t" style="font-size:18px;font-weight:700">' + esc(cur.title) + '</div>' +
     '<div class="muted">' + esc(cur.displayPath || cur.name) +
     (cur.iosOk ? "" : ' <span class="badge">iPad 可能播不了</span>') + '</div>' +
@@ -1123,6 +1124,29 @@ function bind() {
     var last = S.player && S.player.id === S.config.lastVideo ? S.player.time : 0;
     player.currentTime = last || 0;
     var prevT = last || 0;
+    // 播放失败时把服务端的诊断原因显示出来，省得开 F12 抓 404
+    player.addEventListener("error", function () {
+      var box = document.getElementById("vidErr");
+      if (!box) return;
+      var c = player.error ? player.error.code : 0;
+      var msg = { 1: "视频加载被中断", 2: "网络错误，视频流中断",
+                  3: "视频解码失败", 4: "找不到视频，或格式不支持" }[c] || "视频加载失败";
+      box.style.display = "block";
+      box.innerHTML = "⚠️ " + msg + "，正在查询原因…";
+      var cv = currentVideo();
+      if (!cv || !Api.streamUrl) return;
+      fetch(Api.streamUrl(cv), { headers: { "Range": "bytes=0-0" } })
+        .then(function (r) { return r.ok ? null : r.json().catch(function () { return null; }); })
+        .then(function (j) {
+          if (!j) { box.innerHTML = "⚠️ " + msg + "（服务器能读到文件，多半是浏览器不支持该编码）。"; return; }
+          var d = j.detail || {};
+          box.innerHTML = "⚠️ " + msg + "。<br>原因：<b>" + esc(j.reason || "未知") + "</b>　" +
+            esc(j.hint || "") +
+            "<br><span style=\"font-size:12px;opacity:.75\">容器内路径：" + esc(d.wanted || "") +
+            "　存在：" + (d.exists ? "是" : "否") + "　允许播放：" + (d.allowed ? "是" : "否") + "</span>";
+        })
+        .catch(function () { box.innerHTML = "⚠️ " + msg + "。"; });
+    });
     player.addEventListener("timeupdate", function () {
       var t = player.currentTime;
       if (!player.paused && t > prevT && t - prevT < 2) {

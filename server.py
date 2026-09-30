@@ -561,13 +561,51 @@ class Handler(BaseHTTPRequestHandler):
                 vp = match["path"] if match else ""
             vp = to_container_path(vp)
             cfg = load_config()
-            allowed = any(safe_under(vp, to_container_path(d))
-                          for d in cfg.get("videoDirs", [])) or safe_under(vp, MEDIA_ROOT)
-            if not allowed or not os.path.isfile(vp):
-                self.send_json({"error": "video not found or not allowed"}, 404)
+            dirs = [to_container_path(d) for d in cfg.get("videoDirs", [])]
+
+            def is_allowed(p):
+                return any(safe_under(p, d) for d in dirs) or safe_under(p, MEDIA_ROOT)
+
+            def send(p):
+                self.send_file(p, mimetypes.guess_type(p)[0] or "video/mp4")
+
+            # 正常命中
+            if is_allowed(vp) and os.path.isfile(vp):
+                send(vp)
                 return
-            ctype = mimetypes.guess_type(vp)[0] or "video/mp4"
-            self.send_file(vp, ctype)
+
+            # 兜底：NAS 路径与容器路径映射漂移时，换算后再找一次
+            cands = []
+            if HOST_ROOT:
+                cands.append(to_display_path(vp))
+                if vp.startswith(MEDIA_ROOT):
+                    cands.append(HOST_ROOT.rstrip("/") + vp[len(MEDIA_ROOT):])
+            if not vp.startswith(MEDIA_ROOT):
+                cands.append(os.path.join(MEDIA_ROOT, vp.lstrip("/")))
+            for c in cands:
+                if c and c != vp and is_allowed(c) and os.path.isfile(c):
+                    send(c)
+                    return
+
+            # 走到这里说明真的找不到：给出可定位的诊断信息（见浏览器 F12 → Network）
+            exists = os.path.isfile(vp)
+            self.send_json({
+                "error": "video not found or not allowed",
+                "reason": "missing_file" if not exists else "not_allowed",
+                "detail": {
+                    "wanted": vp,
+                    "exists": exists,
+                    "allowed": is_allowed(vp),
+                    "videoDirs": dirs,
+                    "videoDirsExist": [os.path.isdir(d) for d in dirs],
+                    "mediaRoot": MEDIA_ROOT,
+                    "mediaRootExists": os.path.isdir(MEDIA_ROOT),
+                    "hostRoot": HOST_ROOT or "(未设置)",
+                },
+                "hint": ("容器里找不到这个视频文件，多半是挂载/路径变了，去家长设置页重新扫描一次"
+                         if not exists else
+                         "视频不在允许的目录里，去家长设置页检查视频目录（videoDirs）配置"),
+            }, 404)
             return
 
         if path.startswith("/api/thumbs/"):
