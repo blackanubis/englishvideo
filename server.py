@@ -207,60 +207,6 @@ def probe_duration(path):
         return None
 
 
-CODEC_RE = re.compile(r"Stream #\d+:\d+.*?:\s+(Video|Audio):\s+([a-z0-9_]+)")
-DUR_RE = re.compile(r"Duration:\s+(\d+):(\d+):(\d+\.?\d*)")
-
-
-def probe_media(path):
-    """探测时长与编码。返回 {duration, vcodec, acodec}，缺失时不带对应键。
-
-    优先用 ffprobe（快）；没有 ffprobe 时退化到 ffmpeg -i 解析输出，
-    保证只装了 ffmpeg 的环境也能拿到编码信息。
-    """
-    if shutil.which("ffprobe"):
-        try:
-            out = subprocess.run(
-                ["ffprobe", "-v", "error", "-show_entries",
-                 "format=duration:stream=codec_name,codec_type",
-                 "-of", "json", path],
-                capture_output=True, timeout=20)
-            data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
-        except Exception:
-            data = {}
-        info = {}
-        try:
-            info["duration"] = float(data["format"]["duration"]) or None
-        except Exception:
-            pass
-        for s in data.get("streams", []):
-            t = s.get("codec_type")
-            if t == "video" and "vcodec" not in info:
-                info["vcodec"] = s.get("codec_name")
-            elif t == "audio" and "acodec" not in info:
-                info["acodec"] = s.get("codec_name")
-        if info:
-            return info
-
-    # 降级路径只要求 ffmpeg 本身（have_ffmpeg 还会额外要求 ffprobe，这里不能复用）
-    if not shutil.which("ffmpeg"):
-        return {}
-    try:
-        out = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-i", path],
-            capture_output=True, timeout=20)
-        txt = out.stderr.decode("utf-8", "replace")
-    except Exception:
-        return {}
-    info = {}
-    m = DUR_RE.search(txt)
-    if m:
-        info["duration"] = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
-    for kind, codec in CODEC_RE.findall(txt):
-        key = "vcodec" if kind == "Video" else "acodec"
-        if key not in info:
-            info[key] = codec
-    return info
-
 
 def grab_frame(path, out_jpg, at_sec, width=480):
     try:
@@ -314,18 +260,12 @@ def run_scan(full=False):
                     "ext": os.path.splitext(path)[1].lower(),
                     "size": os.path.getsize(path),
                     "duration": v.get("duration"),
-                    "vcodec": v.get("vcodec"),
-                    "acodec": v.get("acodec"),
                     "cover": None,
                     "frames": v.get("frames", []),
                     "iosOk": os.path.splitext(path)[1].lower() in IOS_OK_EXT,
                 }
-                if full or item["duration"] is None or not item["vcodec"]:
-                    info = probe_media(path)
-                    if info.get("duration"):
-                        item["duration"] = info["duration"]
-                    item["vcodec"] = info.get("vcodec") or item["vcodec"]
-                    item["acodec"] = info.get("acodec") or item["acodec"]
+                if full or item["duration"] is None:
+                    item["duration"] = probe_duration(path)
                 library.append(item)
                 SCAN_STATE["done"] = idx + 1
                 SCAN_STATE["message"] = "已扫描 %d/%d" % (idx + 1, len(files))
@@ -484,38 +424,6 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             return {}
 
-    def send_transcode(self, path):
-        """实时转码为 H.264/AAC 720p fragmented MP4 流（不支持拖动进度，但保证能播）"""
-        self.send_response(200)
-        self.send_header("Content-Type", "video/mp4")
-        self.send_header("Connection", "close")
-        self.end_headers()
-        self.close_connection = True
-        cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path,
-               "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
-               "-vf", "scale=-2:720",
-               "-c:a", "aac", "-b:a", "128k", "-ac", "2",
-               "-movflags", "frag_keyframe+empty_moov", "-f", "mp4", "pipe:1"]
-        try:
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                    stderr=subprocess.DEVNULL)
-        except Exception as e:
-            sys.stderr.write("[transcode] ffmpeg 启动失败: %s\n" % e)
-            return
-        try:
-            while True:
-                chunk = proc.stdout.read(262144)
-                if not chunk:
-                    break
-                self.wfile.write(chunk)
-        except Exception:
-            pass  # 客户端断开（暂停/换集）属正常
-        finally:
-            try:
-                proc.kill()
-            except Exception:
-                pass
-
     # --- 路由 ---
 
     def do_HEAD(self):
@@ -659,13 +567,6 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"error": "video not found or not allowed"}, 404)
                 return
             ctype = mimetypes.guess_type(vp)[0] or "video/mp4"
-            if qs.get("transcode", ["0"])[0] in ("1", "true"):
-                # 兼容模式：服务器实时转码为 H.264/AAC 720p（应对 HEVC 等浏览器解不了的编码）
-                if not shutil.which("ffmpeg"):
-                    self.send_json({"error": "ffmpeg not available"}, 503)
-                    return
-                self.send_transcode(vp)
-                return
             self.send_file(vp, ctype)
             return
 
