@@ -152,6 +152,18 @@ video.player {
 .vsub { font-size: 12px; color: var(--ink2); }
 .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #ffe3e0; color: #c0392b; margin-left: 4px; }
 .badge.ok { background: #e0f5ec; color: #1e8e5a; }
+/* ---------- 进度条（提取单词） ---------- */
+.progwrap { margin-top: 10px; }
+.progbar {
+  height: 10px; border-radius: 999px; background: #e8ecf3; overflow: hidden;
+}
+.progbar i {
+  display: block; height: 100%; border-radius: 999px;
+  background: linear-gradient(90deg, #4c9aff, #b18cff);
+  transition: width .4s ease;
+}
+.progtxt { margin-top: 6px; font-size: 14px; }
+
 .viderr {
   display: none; margin-top: 10px; padding: 10px 14px; border-radius: 12px;
   background: #fff3f0; color: #c0392b; font-size: 14px; line-height: 1.5;

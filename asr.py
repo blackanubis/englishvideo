@@ -50,6 +50,13 @@ STATE = {
     "done": 0,
     "startedAt": 0,
     "results": [],
+    # 进度显示用
+    "current": 0,     # 正在处理第几集（1 起）
+    "title": "",      # 正在处理的视频名
+    "phase": "",      # 当前阶段：读字幕 / 抽音频 / 语音转写 / 整理单词
+    "itemPct": 0,     # 当前这一集内部的进度 0-100
+    "pct": 0,         # 整批进度 0-100
+    "etaSec": 0,      # 预计剩余秒数
 }
 
 _MODEL = None
@@ -315,15 +322,18 @@ def load_subtitle_file(path):
 
 # ---------- 转写 ----------
 
-def transcribe_audio(video_path, max_sec=0):
+def transcribe_audio(video_path, max_sec=0, on_progress=None, total_sec=0):
     """ffmpeg 抽 16k 单声道 wav → faster-whisper 转写（带词级时间戳）
 
     max_sec > 0 时只取前 max_sec 秒（快速模式），用于只要词表、不要完整字幕。
+    on_progress(phase, pct) 用于前端进度条；total_sec 是这段音频的总时长。
     """
     if not have_ffmpeg() or not have_whisper():
         return []
     if max_sec <= 0:
         max_sec = FAST_SEC
+    if on_progress:
+        on_progress("抽音频", 8)
     os.makedirs(AUDIO_DIR, exist_ok=True)
     wav = os.path.join(AUDIO_DIR, "%d.wav" % time.time_ns())
     try:
@@ -335,10 +345,13 @@ def transcribe_audio(video_path, max_sec=0):
         subprocess.run(cmd, capture_output=True, timeout=600)
         if not os.path.exists(wav):
             return []
+        if on_progress:
+            on_progress("语音转写", 15)
         model = load_model()
         segments, _info = model.transcribe(wav, language="en", beam_size=5,
                                            vad_filter=True, word_timestamps=True)
         out = []
+        last_pct = 15
         for seg in segments:
             words = []
             try:
@@ -348,6 +361,14 @@ def transcribe_audio(video_path, max_sec=0):
                 pass
             out.append({"start": seg.start, "end": seg.end,
                         "text": (seg.text or "").strip(), "words": words})
+            # 用已转写到的时间点估算内部进度（15% ~ 95%）
+            if on_progress and total_sec and total_sec > 0:
+                pct = 15 + min(80, (seg.end or 0) / total_sec * 80)
+                if pct - last_pct >= 2 or pct >= 94:
+                    on_progress("语音转写", pct)
+                    last_pct = pct
+        if on_progress:
+            on_progress("整理词表", 97)
         return out
     except Exception as e:
         print("[asr] 转写失败：%s" % e)
@@ -388,10 +409,11 @@ def transcript_path(vid):
     return os.path.join(TRANS_DIR, "%s.json" % vid)
 
 
-def ensure_transcript(item, force=False, fast=False):
+def ensure_transcript(item, force=False, fast=False, on_progress=None):
     """返回 (source, segments)。source: subtitle | asr | none
 
     fast=True 时语音识别只跑前 FAST_SEC 秒，且不生成完整字幕文件。
+    on_progress(phase, pct) 用于前端进度条。
     """
     os.makedirs(TRANS_DIR, exist_ok=True)
     tp = transcript_path(item["id"])
@@ -399,12 +421,16 @@ def ensure_transcript(item, force=False, fast=False):
         try:
             with open(tp, "r", encoding="utf-8") as f:
                 d = json.load(f)
+            if on_progress:
+                on_progress("已有结果", 100)
             return d.get("source", "none"), d.get("segments", [])
         except Exception:
             pass
 
     segments, source = [], "none"
 
+    if on_progress:
+        on_progress("找字幕", 20)
     ext = find_external_subtitle(item["path"])
     if ext:
         segments = load_subtitle_file(ext)
@@ -412,6 +438,8 @@ def ensure_transcript(item, force=False, fast=False):
             source = "subtitle"
 
     if not segments:
+        if on_progress:
+            on_progress("拆内嵌字幕", 45)
         os.makedirs(SUB_DIR, exist_ok=True)
         tmp = os.path.join(SUB_DIR, "_tmp_%s.srt" % item["id"])
         if extract_embedded_subtitle(item["path"], tmp):
@@ -424,7 +452,11 @@ def ensure_transcript(item, force=False, fast=False):
             pass
 
     if not segments:
-        segments = transcribe_audio(item["path"], FAST_SEC if fast else 0)
+        # 转写时长：快速模式取前 FAST_SEC 秒，否则整集
+        total = float(item.get("duration") or 0)
+        span = min(total, FAST_SEC) if (fast and total) else (total or FAST_SEC)
+        segments = transcribe_audio(item["path"], FAST_SEC if fast else 0,
+                                    on_progress, span)
         if segments:
             source = "asr"
 
@@ -445,9 +477,11 @@ def ensure_transcript(item, force=False, fast=False):
 def run_job(items, force=False, fast=False):
     if STATE["running"]:
         return
-    STATE.update({"running": True, "message": "准备中", "total": len(items),
+    n = len(items)
+    STATE.update({"running": True, "message": "准备中", "total": n,
                   "done": 0, "startedAt": time.time(), "results": [],
-                  "fast": bool(fast)})
+                  "fast": bool(fast), "current": 0, "title": "",
+                  "phase": "准备", "itemPct": 0, "pct": 0, "etaSec": 0})
 
     def worker():
         results = []
@@ -458,12 +492,29 @@ def run_job(items, force=False, fast=False):
                 pass
         try:
             for i, item in enumerate(items):
-                STATE["message"] = "处理 %d/%d：%s" % (i + 1, len(items), item.get("title"))
-                src, segs = ensure_transcript(item, force, fast)
+
+                def cb(phase, pct, i=i):
+                    STATE["phase"] = phase
+                    STATE["itemPct"] = max(0.0, min(100.0, pct))
+                    donef = i + STATE["itemPct"] / 100.0
+                    STATE["pct"] = round(donef / max(1, n) * 100, 1)
+                    el = time.time() - STATE["startedAt"]
+                    if donef > 0.05 and donef < n:
+                        STATE["etaSec"] = int(el / donef * (n - donef))
+                    elif donef >= n:
+                        STATE["etaSec"] = 0
+
+                STATE["current"] = i + 1
+                STATE["title"] = item.get("title") or item.get("name") or ""
+                STATE["message"] = "处理 %d/%d：%s" % (i + 1, n, STATE["title"])
+                cb("准备", 0)
+                src, segs = ensure_transcript(item, force, fast, cb)
                 results.append({"id": item["id"], "title": item.get("title"),
                                 "source": src, "segments": len(segs)})
                 STATE["results"] = results
                 STATE["done"] = i + 1
+                STATE["itemPct"] = 100
+                STATE["pct"] = round((i + 1) / max(1, n) * 100, 1)
             ok = sum(1 for r in results if r["source"] != "none")
             STATE["message"] = "完成：%d/%d 个视频拿到文本（字幕 %d，识别 %d）" % (
                 ok, len(results),
@@ -473,6 +524,10 @@ def run_job(items, force=False, fast=False):
             STATE["message"] = "提取出错：%s" % e
         finally:
             STATE["running"] = False
+            STATE["pct"] = 100
+            STATE["itemPct"] = 100
+            STATE["phase"] = "完成"
+            STATE["etaSec"] = 0
 
     threading.Thread(target=worker, daemon=True).start()
 

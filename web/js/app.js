@@ -1345,10 +1345,41 @@ function loadAsrCaps() {
           ? '没有字幕的视频会自动转写。用「快速模式」只听前一两分钟，快很多'
           : '只能提取已有字幕的视频；想用语音识别需要带模型的镜像');
     }
-    var info = document.getElementById("asrInfo");
-    if (info && r.state && r.state.message) info.textContent = r.state.message;
-    if (S.asrRunning) setTimeout(loadAsrCaps, 2000);
+    renderAsrProgress(r.state);
+    if (S.asrRunning && S.route === "parent") setTimeout(loadAsrCaps, 1500);
   });
+}
+
+// 提取进度条：整体 % + 第几集 + 当前阶段 + 预计剩余时间
+function fmtEta(sec) {
+  sec = Math.max(0, Math.round(sec || 0));
+  if (sec < 60) return sec + " 秒";
+  var m = Math.floor(sec / 60), s = sec % 60;
+  if (m < 60) return m + " 分 " + (s ? s + " 秒" : "");
+  return Math.floor(m / 60) + " 小时 " + (m % 60) + " 分";
+}
+function renderAsrProgress(st) {
+  var el = document.getElementById("asrInfo");
+  if (!el) return;
+  if (!st) { el.innerHTML = ""; return; }
+  if (!st.running) {
+    el.innerHTML = st.message ? esc(st.message) : "";
+    if (S.asrRunning) {          // 刚跑完
+      S.asrRunning = false;
+      toast("提取完成：" + (st.message || ""));
+    }
+    return;
+  }
+  var pct = Math.max(0, Math.min(100, st.pct || 0));
+  var eta = st.etaSec > 0 ? " · 预计还需 " + fmtEta(st.etaSec) : "";
+  el.innerHTML =
+    '<div class="progwrap">' +
+    '<div class="progbar"><i style="width:' + pct + '%"></i></div>' +
+    '<div class="progtxt"><b>' + pct + '%</b>' +
+    ' · 第 ' + (st.current || 0) + '/' + (st.total || 0) + ' 集' +
+    (st.title ? ' · ' + esc(st.title) : '') + '</div>' +
+    '<div class="muted">' + esc(st.phase || "") + ' ' + Math.round(st.itemPct || 0) + '%' +
+    eta + '</div></div>';
 }
 function startAsr(force) {
   if (!S.videos.length) { toast("先扫描视频再来提取"); return; }
