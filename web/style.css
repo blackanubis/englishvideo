@@ -151,6 +151,11 @@ video.player {
 .vtitle { font-size: 14px; font-weight: 600; line-height: 1.35; }
 .vsub { font-size: 12px; color: var(--ink2); }
 .badge { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 999px; background: #ffe3e0; color: #c0392b; margin-left: 4px; }
+.badge.ok { background: #e0f5ec; color: #1e8e5a; }
+.viderr {
+  display: none; margin-top: 10px; padding: 10px 14px; border-radius: 12px;
+  background: #fff3f0; color: #c0392b; font-size: 14px; line-height: 1.5;
+}
 
 /* ---------- 跟读 ---------- */
 .wordcard { text-align: center; padding: 24px 18px; }

@@ -10,6 +10,7 @@ var S = {
   timer: null,
   tick: null,
   player: null,      // {id, time}
+  transVideo: null,  // 正在使用兼容模式（服务器转码）播放的视频 id
   speakIdx: 0,
   game: null,
   review: null,      // {words, idx, phase:"speak"|"game"|"done", readCount}
@@ -257,18 +258,38 @@ function viewVideo() {
     return h;
   }
   var cur = currentVideo();
+  if (!cur) return "";
+  var trans = S.transVideo === cur.id;
+  // 桌面浏览器（Chrome/Edge）不支持 HEVC/H.265 等编码，iPad Safari 支持——按真实编码提示
+  var VC_OK = ["h264", "mpeg4", "vp8", "vp9", "av1", "flv1", "vp6", "theora", "mpeg1video", "mpeg2video"];
+  var AC_OK = ["aac", "mp3", "ac3", "eac3", "opus", "vorbis", "flac", "alac",
+               "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_u8", "mp1", "mp2"];
+  var codecBad = (cur.vcodec && VC_OK.indexOf(cur.vcodec) < 0) ||
+                 (cur.acodec && AC_OK.indexOf(cur.acodec) < 0);
+  var src = trans ? Api.streamUrl(cur) + "&transcode=1" : Api.streamUrl(cur);
   h += '<video class="player" id="player" playsinline controls preload="metadata" ' +
-    (cur.cover ? 'poster="' + esc(cur.cover) + '"' : '') +
-    ' src="' + Api.streamUrl(cur) + '">' +
+    (cur.cover && !trans ? 'poster="' + esc(cur.cover) + '"' : '') +
+    ' src="' + esc(src) + '">' +
     '<track kind="subtitles" src="/api/subtitle?id=' + esc(cur.id) +
     '" srclang="en" label="English"></track></video>';
+  h += '<div class="viderr" id="vidErr"></div>';
   h += '<div class="card"><div class="t" style="font-size:18px;font-weight:700">' + esc(cur.title) + '</div>' +
     '<div class="muted">' + esc(cur.displayPath || cur.name) +
-    (cur.iosOk ? "" : ' <span class="badge">iPad 可能播不了</span>') + '</div>' +
-    '<div class="btnrow" style="margin-top:12px">' +
+    (cur.iosOk ? "" : ' <span class="badge">iPad 可能播不了</span>');
+  if (codecBad) {
+    h += ' <span class="badge">编码 ' + esc((cur.vcodec || "?") +
+      (cur.acodec ? "/" + cur.acodec : "")) + '，浏览器可能不支持</span>';
+  }
+  if (trans) h += ' <span class="badge ok">兼容模式播放中</span>';
+  h += '</div><div class="btnrow" style="margin-top:12px">' +
     '<button class="btn sm ghost" data-act="prev">⏮ 上一集</button>' +
-    '<button class="btn sm ghost" data-act="next">⏭ 下一集</button>' +
-    '<button class="btn sm orange" data-act="go" data-route="speak">去跟读 ›</button>' +
+    '<button class="btn sm ghost" data-act="next">⏭ 下一集</button>';
+  if (codecBad || trans) {
+    h += '<button class="btn sm ' + (trans ? "ghost" : "orange") +
+      '" data-act="transplay" data-id="' + esc(cur.id) + '">' +
+      (trans ? "⏹ 关闭兼容模式" : "🔄 兼容模式播放") + '</button>';
+  }
+  h += '<button class="btn sm orange" data-act="go" data-route="speak">去跟读 ›</button>' +
     '</div></div>';
 
   h += '<div class="section-title">全部视频（' + S.videos.length + '）</div><div class="vgrid">';
@@ -296,6 +317,7 @@ function stepVideo(delta) {
   var n = (i + delta + S.videos.length) % S.videos.length;
   S.config.lastVideo = S.videos[n].id;
   S.player = null;
+  S.transVideo = null;
   Api.saveConfig({ lastVideo: S.videos[n].id });
   render();
 }
@@ -1062,10 +1084,17 @@ function bind() {
     if (!el) return;
     var act = el.dataset.act;
     if (act === "go") go(el.dataset.route);
-    else if (act === "play") {
+    else     if (act === "play") {
       S.config.lastVideo = el.dataset.id;
       S.player = null;
+      S.transVideo = null;
       Api.saveConfig({ lastVideo: el.dataset.id });
+      render();
+    } else if (act === "transplay") {
+      var tid = el.dataset.id || (currentVideo() || {}).id;
+      if (S.transVideo === tid) { S.transVideo = null; }
+      else { S.transVideo = tid; }
+      S.player = null;
       render();
     } else if (act === "prev") stepVideo(-1);
     else if (act === "next") stepVideo(1);
@@ -1124,6 +1153,18 @@ function bind() {
     var last = S.player && S.player.id === S.config.lastVideo ? S.player.time : 0;
     player.currentTime = last || 0;
     var prevT = last || 0;
+    var showVidErr = function () {
+      var box = document.getElementById("vidErr");
+      if (!box) return;
+      var c = player.error ? player.error.code : 0;
+      if (!c) { box.style.display = "none"; return; }
+      var msg = { 1: "视频加载被中断", 2: "网络错误，视频流中断",
+                  3: "视频解码失败", 4: "浏览器不支持此视频格式（常见为 HEVC/H.265 编码）" }[c] || "视频加载失败";
+      box.innerHTML = "⚠️ " + msg + "。可点上方「🔄 兼容模式播放」，由服务器转码后观看（iPad 一般可正常播放）。";
+      box.style.display = "block";
+    };
+    player.addEventListener("error", showVidErr);
+    if (player.error) setTimeout(showVidErr, 0);
     player.addEventListener("timeupdate", function () {
       var t = player.currentTime;
       if (!player.paused && t > prevT && t - prevT < 2) {
