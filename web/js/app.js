@@ -1153,15 +1153,33 @@ function bind() {
     var last = S.player && S.player.id === S.config.lastVideo ? S.player.time : 0;
     player.currentTime = last || 0;
     var prevT = last || 0;
+    // 浏览器解码失败（不支持的编码/容器）时，自动切到服务器转码的兼容模式重播，
+    // 免得家长还得手动点按钮。只在首次失败时切一次，避免来回死循环。
+    var autoSwitched = S.transVideo === S.config.lastVideo;
     var showVidErr = function () {
       var box = document.getElementById("vidErr");
       if (!box) return;
       var c = player.error ? player.error.code : 0;
       if (!c) { box.style.display = "none"; return; }
+      var cur0 = currentVideo() || {};
+      var ctag = cur0.vcodec ? "（" + esc(cur0.vcodec + (cur0.acodec ? "/" + cur0.acodec : "")) + "）" : "";
       var msg = { 1: "视频加载被中断", 2: "网络错误，视频流中断",
-                  3: "视频解码失败", 4: "浏览器不支持此视频格式（常见为 HEVC/H.265 编码）" }[c] || "视频加载失败";
-      box.innerHTML = "⚠️ " + msg + "。可点上方「🔄 兼容模式播放」，由服务器转码后观看（iPad 一般可正常播放）。";
+                  3: "视频解码失败", 4: "浏览器不支持此视频格式" + ctag +
+                     "（常见原因：HEVC/H.265 编码，iPad 支持、部分电脑浏览器不支持）" }[c] || "视频加载失败";
+      box.innerHTML = "⚠️ " + msg + "。";
       box.style.display = "block";
+      if ((c === 4 || c === 3) && !autoSwitched && !S.transVideo) {
+        autoSwitched = true;
+        box.innerHTML += "正在自动切换到「兼容模式」（服务器转码）…";
+        setTimeout(function () {
+          S.transVideo = cur0.id || S.config.lastVideo;
+          S.player = null;
+          render();
+          toast("已切换到兼容模式播放（不能拖进度条）");
+        }, 300);
+      } else if (!S.transVideo) {
+        box.innerHTML += "可点上方「🔄 兼容模式播放」，由服务器转码后观看。";
+      }
     };
     player.addEventListener("error", showVidErr);
     if (player.error) setTimeout(showVidErr, 0);

@@ -207,30 +207,58 @@ def probe_duration(path):
         return None
 
 
+CODEC_RE = re.compile(r"Stream #\d+:\d+.*?:\s+(Video|Audio):\s+([a-z0-9_]+)")
+DUR_RE = re.compile(r"Duration:\s+(\d+):(\d+):(\d+\.?\d*)")
+
+
 def probe_media(path):
-    """用 ffprobe 探测时长与编码。返回 {duration, vcodec, acodec}，缺失时不带对应键。"""
-    if not shutil.which("ffprobe"):
+    """探测时长与编码。返回 {duration, vcodec, acodec}，缺失时不带对应键。
+
+    优先用 ffprobe（快）；没有 ffprobe 时退化到 ffmpeg -i 解析输出，
+    保证只装了 ffmpeg 的环境也能拿到编码信息。
+    """
+    if shutil.which("ffprobe"):
+        try:
+            out = subprocess.run(
+                ["ffprobe", "-v", "error", "-show_entries",
+                 "format=duration:stream=codec_name,codec_type",
+                 "-of", "json", path],
+                capture_output=True, timeout=20)
+            data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
+        except Exception:
+            data = {}
+        info = {}
+        try:
+            info["duration"] = float(data["format"]["duration"]) or None
+        except Exception:
+            pass
+        for s in data.get("streams", []):
+            t = s.get("codec_type")
+            if t == "video" and "vcodec" not in info:
+                info["vcodec"] = s.get("codec_name")
+            elif t == "audio" and "acodec" not in info:
+                info["acodec"] = s.get("codec_name")
+        if info:
+            return info
+
+    # 降级路径只要求 ffmpeg 本身（have_ffmpeg 还会额外要求 ffprobe，这里不能复用）
+    if not shutil.which("ffmpeg"):
         return {}
     try:
         out = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries",
-             "format=duration:stream=codec_name,codec_type",
-             "-of", "json", path],
+            ["ffmpeg", "-hide_banner", "-i", path],
             capture_output=True, timeout=20)
-        data = json.loads(out.stdout.decode("utf-8", "replace") or "{}")
+        txt = out.stderr.decode("utf-8", "replace")
     except Exception:
         return {}
     info = {}
-    try:
-        info["duration"] = float(data["format"]["duration"]) or None
-    except Exception:
-        pass
-    for s in data.get("streams", []):
-        t = s.get("codec_type")
-        if t == "video" and "vcodec" not in info:
-            info["vcodec"] = s.get("codec_name")
-        elif t == "audio" and "acodec" not in info:
-            info["acodec"] = s.get("codec_name")
+    m = DUR_RE.search(txt)
+    if m:
+        info["duration"] = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    for kind, codec in CODEC_RE.findall(txt):
+        key = "vcodec" if kind == "Video" else "acodec"
+        if key not in info:
+            info[key] = codec
     return info
 
 
