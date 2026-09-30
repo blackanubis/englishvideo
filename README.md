@@ -63,7 +63,11 @@ docker compose up -d --build
 ## 三、iPad 加到桌面（像 App 一样打开）
 
 Safari 打开 `http://<NAS的IP>:13002` → 底部分享按钮 → **添加到主屏幕**。
-之后点桌面图标就是全屏打开，没有地址栏。
+之后点桌面图标就是全屏打开，没有地址栏。桌面图标就是站点图标（蓝紫底、字母 A + 播放按钮）。
+
+> 图标说明：浏览器标签页小图标用 `web/favicon.ico`；iPad 主屏幕用 `web/icons/apple-touch-icon.png`；
+> Android / PWA 安装用 `web/icons/manifest.webmanifest` + 512px 图标。
+> 图标源文件为 `web/icons/icon.svg`，由根目录外脚本 `build_icon.py` 一键重新生成全部尺寸。
 
 ## 四、五个功能怎么用
 
@@ -211,6 +215,8 @@ english-kids/
 ├── defaults/words.csv      默认词库（78 个词，8 个主题）
 ├── defaults/dict-en-zh.csv 内置英中词典（4000 条，给候选词自动补中文）
 ├── web/                    前端页面
+│   ├── favicon.ico         标签页图标（16/32/48）
+│   └── icons/              图标全套：svg 源 + 16~512px PNG + 主屏幕图标 + manifest
 └── data/                   运行时生成（配置、记录、截图，已挂到数据卷）
     ├── config.json
     ├── library.json

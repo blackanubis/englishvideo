@@ -1,0 +1,16 @@
+{
+  "name": "英语启蒙乐园",
+  "short_name": "英语启蒙",
+  "description": "孩子的英语启蒙：看视频、跟读、连词、复习",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f8ff",
+  "theme_color": "#4c9aff",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

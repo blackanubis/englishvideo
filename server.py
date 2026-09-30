@@ -28,6 +28,12 @@ DEFAULTS_DIR = os.path.join(BASE_DIR, "defaults")
 DATA_DIR = os.environ.get("EK_DATA", os.path.join(BASE_DIR, "data"))
 THUMB_DIR = os.path.join(DATA_DIR, "thumbs")
 
+# 图标相关 MIME（部分系统的 mimetypes 不认识 .svg / .webmanifest）
+mimetypes.add_type("image/svg+xml", ".svg")
+mimetypes.add_type("image/x-icon", ".ico")
+mimetypes.add_type("image/png", ".png")
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+
 CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 LIBRARY_FILE = os.path.join(DATA_DIR, "library.json")
 PROGRESS_FILE = os.path.join(DATA_DIR, "progress.json")
