@@ -390,11 +390,14 @@ function newRound() {
       img: (a && a.length) ? a[Math.floor(Math.random() * a.length)] : null
     };
   });
+  // 注意：left / right 是左右两列的索引数组；
+  // 计数必须用 rightCount / wrongCount，不能叫 right / wrong，否则会把数组覆盖掉
   S.game = {
     words: words,
     left: shuffle(words.map(function (w, i) { return i; })),
     right: shuffle(words.map(function (w, i) { return i; })),
-    sel: null, matched: {}, right: 0, wrong: 0, start: Date.now(), finished: false
+    sel: null, matched: {},
+    rightCount: 0, wrongCount: 0, start: Date.now(), finished: false
   };
 }
 function viewGame() {
@@ -423,9 +426,9 @@ function viewGame() {
   if (g.finished) {
     var sec = Math.round((Date.now() - g.start) / 1000);
     h += '<div class="card" style="text-align:center"><div style="font-size:40px">' +
-      (g.wrong === 0 ? "🎉" : "👏") + '</div>' +
+      (g.wrongCount === 0 ? "🎉" : "👏") + '</div>' +
       '<div style="font-size:18px;font-weight:700">这一轮完成！</div>' +
-      '<div class="muted">用时 ' + sec + ' 秒 · 正确 ' + g.right + ' 次 · 错 ' + g.wrong + ' 次</div>' +
+      '<div class="muted">用时 ' + sec + ' 秒 · 正确 ' + g.rightCount + ' 次 · 错 ' + g.wrongCount + ' 次</div>' +
       '<div style="margin-top:12px"><button class="btn green" data-act="newround">再来一轮</button></div></div>';
   }
   return h;
@@ -466,7 +469,7 @@ function onPickWord(i) {
   if (g.sel === null) { toast("先点一张图片哦"); return; }
   if (g.sel === i) {
     g.matched[i] = true;
-    g.right++;
+    g.rightCount++;
     g.sel = null;
     speak(g.words[i].word);
     var d = today();
@@ -479,7 +482,7 @@ function onPickWord(i) {
     }
     render();
   } else {
-    g.wrong++;
+    g.wrongCount++;
     var d2 = today();
     d2.game.wrong = (d2.game.wrong || 0) + 1;
     saveProgress();
